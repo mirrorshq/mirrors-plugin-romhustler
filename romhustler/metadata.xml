@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<plugin id="romhustler">
+  <file-mirror id="romhustler">
+    <name>Mirror for romhustler.org</name>
+    <data-directory>romhustler</data-directory>
+    <initializer>
+      <executable>updater.py</executable>
+    </initializer>
+    <updater>
+      <executable>updater.py</executable>
+      <cron-expression>0 * * * *</cron-expression>
+    </updater>
+    <advertiser>
+      <protocol>http</protocol>
+      <protocol>ftp</protocol>
+    </advertiser>
+  </file-mirror>
+</plugin>

@@ -41,7 +41,7 @@ def main():
                     try:
                         romName, romFile = obj.download(gameId, os.path.join(romUrlPrefix, gameId))
                         _Util.ensureDir(targetDir)
-                        os.rename(romFile, os.path.join(targetDir, os.path.basename(romFile)))
+                        shutil.move(romFile, targetDir)
                         print("Popular game %s downloaded." % (gameId))
                     except _GameDownloader.BadUrlError:
                         print("Popular game %s does not exists." % (gameId))
@@ -49,6 +49,9 @@ def main():
                         print("Popular game %s is not available for download." % (gameId))
                     except _GameDownloader.DownloadFailedError:
                         print("Popular game %s is not successfully downloaded." % (gameId))
+                    except Exception:
+                        print("Unknown error occured when downloading popular game %s." % (gameId))
+                        pass
             i += 1
             _Util.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
 
@@ -130,8 +133,6 @@ class _GameDownloader:
 
             # wait download complete
             romFile = self._waitDownloadComplete()
-            if romFile is None:
-                raise self.DownloadFailedError()
 
             return (romName, romFile)
 
@@ -148,7 +149,7 @@ class _GameDownloader:
                     sz = os.path.getsize(flist[0])
                     if crDwnFileLastSize == sz:
                         if crDwnFileSizeEqualCount > 30:
-                            return None         # file size have not changed for 30 seconds, download failed
+                            raise self.DownloadFailedError()    # file size have not changed for 30s, download failed
                         crDwnFileSizeEqualCount += 1
                     else:
                         crDwnFileLastSize = sz
@@ -156,16 +157,14 @@ class _GameDownloader:
                 else:
                     crDwnFileLastName = flist[0]
                     crDwnFileLastSize = os.path.getsize(crDwnFileLastName)
-                continue
-
-            flist = os.listdir(self.downloadTmpDir)
-            if len(flist) > 0:
-                return os.path.join(self.downloadTmpDir, flist[0])
-
-            if noFileCount > 30:
-                return None
-            noFileCount += 1
-
+            else:
+                flist = os.listdir(self.downloadTmpDir)
+                if len(flist) > 0:
+                    return os.path.join(self.downloadTmpDir, flist[0])
+                else:
+                    if noFileCount > 30:
+                        raise self.DownloadFailedError()
+                    noFileCount += 1
             time.sleep(1)
 
 

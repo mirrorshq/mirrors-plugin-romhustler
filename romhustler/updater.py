@@ -44,7 +44,7 @@ def main():
                 if romName is not None:
                     # update target directory
                     _Util.ensureDir(targetDir)
-                    os.rename(romFile, targetDir)
+                    os.rename(romFile, os.path.join(targetDir, os.path.basename(romFile)))
                     print("Popular game %s downloaded." % (gameId))
                 else:
                     # download is not available

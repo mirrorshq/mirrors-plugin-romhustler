@@ -14,6 +14,7 @@ import subprocess
 import selenium.common
 import selenium.webdriver
 
+POPULAR_GAME_PAGE_COUNT = 10
 
 PROGRESS_STAGE_1 = 50
 PROGRESS_STAGE_2 = 50
@@ -23,7 +24,7 @@ def main():
     sock = _Util.connect()
     try:
         selfDir = os.path.dirname(os.path.realpath(__file__))
-        popularGameListFile = os.path.join(selfDir, "games_popular.txt")
+        classicGameListFile = os.path.join(selfDir, "games_classic.txt")
         badGameListFile = os.path.join(selfDir, "games_bad.txt")
         dataDir = sys.argv[1]
         logDir = sys.argv[2]
@@ -31,8 +32,34 @@ def main():
         mainUrl = "https://romhustler.org/roms"
         romUrlPrefix = "https://romhustler.org/rom"
 
+        # download classic games
+        gameIdList = _readGameListFile(classicGameListFile)
+        i = 0
+        for gameId in gameIdList:
+            targetDir = os.path.join(dataDir, gameId)
+            if not os.path.exists(targetDir):
+                with _GameDownloader(isDebug) as obj:
+                    try:
+                        romName, romFile = obj.download(gameId, os.path.join(romUrlPrefix, gameId))
+                        _Util.ensureDir(targetDir)
+                        shutil.move(romFile, targetDir)
+                        print("Classic game %s downloaded." % (gameId))
+                    except _GameDownloader.BadUrlError:
+                        print("Classic game %s does not exists." % (gameId))
+                    except _GameDownloader.NotAvailableError:
+                        print("Classic game %s is not available for download." % (gameId))
+                    except _GameDownloader.DownloadFailedError:
+                        print("Classic game %s is not successfully downloaded." % (gameId))
+                    except Exception:
+                        print("Unknown error occured when downloading classic game %s." % (gameId))
+                        pass
+            i += 1
+            _Util.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
+
         # download popular games
-        gameIdList = _readGameListFile(popularGameListFile)
+        gameIdList = _readGameListFromWebSite(mainUrl, dataDir, POPULAR_GAME_PAGE_COUNT,
+                                              _readGameListFile(badGameListFile), isDebug)
+        print(gameIdList)   # FIXME
         i = 0
         for gameId in gameIdList:
             targetDir = os.path.join(dataDir, gameId)
@@ -52,31 +79,6 @@ def main():
                     except Exception:
                         print("Unknown error occured when downloading popular game %s." % (gameId))
                         pass
-            i += 1
-            _Util.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
-
-        # download some games randomly
-        gameIdList = _readGameListFromWebSite(mainUrl, dataDir, random.randint(10, 100),
-                                              _readGameListFile(badGameListFile), isDebug)
-        print(gameIdList)   # FIXME
-        i = 0
-        for gameId in gameIdList:
-            targetDir = os.path.join(dataDir, gameId)
-            with _GameDownloader(isDebug) as obj:
-                try:
-                    romName, romFile = obj.download(gameId, os.path.join(romUrlPrefix, gameId))
-                    _Util.ensureDir(targetDir)
-                    shutil.move(romFile, targetDir)
-                    print("Game %s downloaded." % (gameId))
-                except _GameDownloader.BadUrlError:
-                    print("Game %s does not exists." % (gameId))
-                except _GameDownloader.NotAvailableError:
-                    print("Game %s is not available for download." % (gameId))
-                except _GameDownloader.DownloadFailedError:
-                    print("Game %s is not successfully downloaded." % (gameId))
-                except Exception:
-                    print("Unknown error occured when downloading game %s." % (gameId))
-                    pass
             i += 1
             _Util.progress_changed(sock, PROGRESS_STAGE_1 + PROGRESS_STAGE_2 * i // len(gameIdList))
 
@@ -99,20 +101,18 @@ def _readGameListFile(filename):
     return gameIdList
 
 
-def _readGameListFromWebSite(mainUrl, dataDir, gameCount, blackList, isDebug):
+def _readGameListFromWebSite(mainUrl, dataDir, pageCount, blackList, isDebug):
     gameIdList = []
     with _SeleniumWebDriver(isDebug) as driver:
         driver.get(mainUrl)                                                         # get first page
-        while True:
+        for i in range(0, pageCount):
             for atag in driver.find_elements_by_xpath('//div[@class="title"]/a'):
                 gameId = "/".join(atag.get_attribute("href").split("/")[-2:])       # "https://romhustler.org/rom/ps2/god-of-war-usa" -> "ps2/god-of-war-usa"
-                if not os.path.exists(os.path.join(dataDir, gameId)):
-                    gameIdList.append(gameId)
-                    if len(gameIdList) >= gameCount:
-                        return gameIdList
+                gameIdList.append(gameId)
             time.sleep(1.0)
             atag = driver.find_element_by_xpath('//a[text()="next>"]')              # get next page
             atag.click()
+    return gameIdList
 
 
 class _GameDownloader:

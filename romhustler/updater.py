@@ -127,7 +127,7 @@ class _Util:
             "data": {
                 "progress": progress,
             },
-        }).encoding("utf-8"))
+        }).encode("utf-8"))
 
     @staticmethod
     def error_occured(sock, exc_info):
@@ -136,7 +136,7 @@ class _Util:
             "data": {
                 "exc_info": "abc",
             },
-        }).encoding("utf-8"))
+        }).encode("utf-8"))
 
     @staticmethod
     def randomSorted(tlist):
@@ -187,7 +187,7 @@ class _SeleniumWebDriver:
         return self.driver
 
     def __exit__(self, type, value, traceback):
-        pass
+        self.driver.close()
 
 
 ###############################################################################

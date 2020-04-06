@@ -36,11 +36,11 @@ nes/ninja-gaiden-3-the-ancient-ship-of-doom
 nes/pac-man
 nes/road-fighter
 nes/super-c
-nes/super-contra3
-nes/super-contra7
-nes/teenage-mutant-ninja-turtles-1
+nes/super-contra-3
+nes/super-contra-7
+nes/teenage-mutant-ninja-turtles
 nes/teenage-mutant-ninja-turtles-ii-the-arcade-game
-nes/teenage-mutant-ninja-turtles3
+nes/teenage-mutant-ninja-turtles-iii-the-manhattan-project
 nes/twinbee
 neogeo/metal-slug
 neogeo/metal-slug-2

@@ -105,7 +105,7 @@ def _readGameListFromWebSite(mainUrl, dataDir, gameCount, blackList, isDebug):
         driver.get(mainUrl)                                                         # get first page
         while True:
             for atag in driver.find_elements_by_xpath('//div[@class="title"]/a'):
-                gameId = atag.href.replace("/rom/")
+                gameId = "/".join(atag.get_attribute("href").split("/")[-2:])       # "https://romhustler.org/rom/ps2/god-of-war-usa" -> "ps2/god-of-war-usa"
                 if not os.path.exists(os.path.join(dataDir, gameId)):
                     gameIdList.append(gameId)
                     if len(gameIdList) >= gameCount:

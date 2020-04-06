@@ -27,9 +27,11 @@ def main():
         badGameListFile = os.path.join(selfDir, "games_bad.txt")
         dataDir = sys.argv[1]
         downloadTmpDir = os.path.join(dataDir, "_tmp")
-        logDir = sys.argv[3]
-        isDebug = (sys.argv[4] == "1")
+        logDir = sys.argv[2]
+        isDebug = (sys.argv[3] == "1")
+        print(isDebug)
         mainUrl = "https://romhustler.org/roms"
+        romUrlPrefix = "https://romhustler.org/rom"
 
         # download popular games
         gameIdList = _readGameListFile(popularGameListFile)
@@ -38,7 +40,7 @@ def main():
             targetDir = os.path.join(dataDir, gameId)
             if not os.path.exists(targetDir):
                 _Util.ensureDir(downloadTmpDir)
-                romName, romFile = _downloadOneGame(gameId, os.path.join(mainUrl, gameId), isDebug, downloadTmpDir)
+                romName, romFile = _downloadOneGame(gameId, os.path.join(romUrlPrefix, gameId), isDebug, downloadTmpDir)
                 if romName is not None:
                     # update target directory
                     _Util.ensureDir(targetDir)

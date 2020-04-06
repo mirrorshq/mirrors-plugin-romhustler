@@ -4,8 +4,10 @@
 import os
 import re
 import sys
+import glob
 import time
 import json
+import shutil
 import random
 import socket
 import subprocess
@@ -21,7 +23,8 @@ def main():
     sock = _Util.connect()
     try:
         selfDir = os.path.dirname(os.path.realpath(__file__))
-        popularGameListFile = os.path.join(selfDir, "popular_games.txt")
+        popularGameListFile = os.path.join(selfDir, "games_popular.txt")
+        badGameListFile = os.path.join(selfDir, "games_bad.txt")
         dataDir = sys.argv[1]
         downloadTmpDir = os.path.join(dataDir, "_tmp")
         logDir = sys.argv[3]
@@ -29,97 +32,29 @@ def main():
         mainUrl = "https://romhustler.org/roms"
 
         # download popular games
-        if True:
-            gameIdList = _readGameListFile(popularGameListFile)
-            for gameId in gameIdList:
-                targetDir = os.path.join(dataDir, gameId)
-                if os.path.exists(targetDir) and False:
-                    # FIXME: only re-download randomly
-                    continue
-
-                with _SeleniumWebDriver(isDebug, downloadTmpDir) as driver:
-                    # load game page
-                    driver.get(os.path.join(mainUrl, gameId))
-
-                    # check if we can download this rom
-                    try:
-                        atag = driver.find_element_by_xpath("//div[contains(text(), \"download is disabled\")]")
-                        print("Games %s is not downloadable." % (gameId))
-                        continue
-                    except selenium.common.exceptions.NoSuchElementException:
-                        pass
-
-                    # get game name
-                    romName = driver.find_element_by_xpath("//h1[@itemprop=\"name\"]").text
-
-                    # load download page, click to download
-                    driver.find_element_by_link_text("Click here to download this rom").click()
-                    while True:
-                        time.sleep(1)
-                        try:
-                            driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
-                            atag = driver.find_element_by_link_text("here")
-                            atag.click()
-                            break
-                        except selenium.common.exceptions.NoSuchElementException:
-                            pass
-
-                    # wait download complete
-                    while not (len(os.listdir(downloadTmpDir)) > 0 and len(glob.glob(os.path.join(downloadTmpDir, "*.crdownload"))) == 0):
-                        time.sleep(1)
-
-                # update target directory
-                if os.path.exists(targetDir):
-                    pass
+        gameIdList = _readGameListFile(popularGameListFile)
+        i = 0
+        for gameId in gameIdList:
+            targetDir = os.path.join(dataDir, gameId)
+            if not os.path.exists(targetDir):
+                _Util.ensureDir(downloadTmpDir)
+                romName, romFile = _downloadOneGame(gameId, os.path.join(mainUrl, gameId), isDebug, downloadTmpDir)
+                if romName is not None:
+                    # update target directory
+                    _Util.ensureDir(targetDir)
+                    os.rename(romFile, targetDir)
+                    print("Popular game %s downloaded." % (gameId))
                 else:
+                    # download is not available
+                    print("Popular game %s is not available for download." % (gameId))
                     pass
+                shutil.rmtree(downloadTmpDir)
+            i += 1
+            _Util.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
 
-            print("All popular games downloaded, total %d files." % (len(gameIdList)))
-            _Util.progress_changed(sock, PROGRESS_STAGE_1)
-
-
-
-
-        # get main page
-        driver.get(mainUrl)
-
-        # random select
-
-
-
-
-
-        # stage1: create directories, get file list, ignore symlinks (file donwloaders can not cope with symlinks)
-        print("Start fetching file list.")
-        fileList = _makeDirAndGetFileList(rsyncSource, dataDir)
-        print("File list fetched, total %d files." % (len(fileList)))
-        _Util.progress_changed(sock, PROGRESS_STAGE_1)
-
-        # stage2: download file list
-        logFile = os.path.join(logDir, "wget.log")
-        i = 1
-        total = len(fileList)
-        for fn in _Util.randomSorted(fileList):
-            fullfn = os.path.join(dataDir, fn)
-            if not os.path.exists(fullfn):
-                print("Download file \"%s\"." % (fn))
-                tmpfn = fullfn + ".tmp"
-                url = os.path.join(fileSource, fn)
-                rc, out = _Util.shellCallWithRetCode("/usr/bin/wget -O \"%s\" %s >%s 2>&1" % (tmpfn, url, logFile))
-                if rc != 0 and rc != 8:
-                    # ignore "file not found" error (8) since rsyncSource/fileSource may be different servers
-                    raise Exception("download %s failed" % (url))
-                os.rename(tmpfn, fullfn)
-            else:
-                print("File \"%s\" exists." % (fn))
-            _Util.progress_changed(sock, PROGRESS_STAGE_1 + PROGRESS_STAGE_2 * i // total)
-        _Util.progress_changed(sock, PROGRESS_STAGE_1 + PROGRESS_STAGE_2)
-
-        # stage3: rsync
-        print("Start rsync.")
-        logFile = os.path.join(logDir, "rsync.log")
-        _Util.shellCall("/usr/bin/rsync -a -z --no-motd --delete %s %s >%s 2>&1" % (rsyncSource, dataDir, logFile))
-        print("Rsync over.")
+        # download or update some games randomly
+        gameNumber = random.randint(10, 100)
+        i = 0
 
         # report full progress
         _Util.progress_changed(sock, 100)
@@ -139,27 +74,40 @@ def _readGameListFile(filename):
                 gameIdList.append(line)
     return gameIdList
 
-def _downloadGame(url, tmpDir):
-    out = _Util.shellCall("/usr/bin/rsync -a --no-motd --list-only %s 2>&1" % (rsyncSource))
 
-    ret = []
-    for line in out.split("\n"):
-        m = re.match("(\\S{10}) +([0-9,]+) +(\\S+ \\S+) (.+)", line)
-        if m is None:
-            continue
-        modstr = m.group(1)
-        filename = m.group(4)
-        if filename.startswith("."):
-            continue
-        if " -> " in filename:
-            continue
+def _downloadOneGame(gameId, gameUrl, isDebug, downloadTmpDir):
+    with _SeleniumWebDriver(isDebug, downloadTmpDir) as driver:
+        # load game page
+        driver.get(gameUrl)
 
-        if modstr.startswith("d"):
-            _Util.ensureDir(os.path.join(dataDir, filename))
-        else:
-            ret.append(filename)
+        # check if we can download this rom
+        try:
+            atag = driver.find_element_by_xpath("//div[contains(text(), \"download is disabled\")]")
+            return (None, None)
+        except selenium.common.exceptions.NoSuchElementException:
+            pass
 
-    return ret
+        # get game name
+        romName = driver.find_element_by_xpath("//h1[@itemprop=\"name\"]").text
+
+        # load download page, click to download
+        driver.find_element_by_link_text("Click here to download this rom").click()
+        while True:
+            time.sleep(1)
+            try:
+                driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+                atag = driver.find_element_by_link_text("here")
+                atag.click()
+                break
+            except selenium.common.exceptions.NoSuchElementException:
+                pass
+
+        # wait download complete
+        while not (len(os.listdir(downloadTmpDir)) > 0 and len(glob.glob(os.path.join(downloadTmpDir, "*.crdownload"))) == 0):
+            time.sleep(1)
+        romFile = os.path.join(downloadTmpDir, os.listdir(downloadTmpDir)[0])
+
+        return (romName, romFile)
 
 
 class _Util:

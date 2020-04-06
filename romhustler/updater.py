@@ -29,7 +29,6 @@ def main():
         downloadTmpDir = os.path.join(dataDir, "_tmp")
         logDir = sys.argv[2]
         isDebug = (sys.argv[3] == "1")
-        print(isDebug)
         mainUrl = "https://romhustler.org/roms"
         romUrlPrefix = "https://romhustler.org/rom"
 

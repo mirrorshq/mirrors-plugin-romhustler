@@ -127,11 +127,46 @@ class _GameDownloader:
                     break
                 except selenium.common.exceptions.NoSuchElementException:
                     pass
-            romFile = driver.waitDownloadComplete()
+
+            # wait download complete
+            romFile = self._waitDownloadComplete()
             if romFile is None:
                 raise self.DownloadFailedError()
 
             return (romName, romFile)
+
+    def _waitDownloadComplete(self):
+        crDwnFileLastName = ""
+        crDwnFileLastSize = -1
+        crDwnFileSizeEqualCount = 0
+        noFileCount = 0
+
+        while True:
+            flist = glob.glob(os.path.join(self.downloadTmpDir, "*.crdownload"))
+            if len(flist) > 0:
+                if crDwnFileLastName == flist[0]:
+                    sz = os.path.getsize(flist[0])
+                    if crDwnFileLastSize == sz:
+                        if crDwnFileSizeEqualCount > 30:
+                            return None         # file size have not changed for 30 seconds, download failed
+                        crDwnFileSizeEqualCount += 1
+                    else:
+                        crDwnFileLastSize = sz
+                        crDwnFileSizeEqualCount = 0
+                else:
+                    crDwnFileLastName = flist[0]
+                    crDwnFileLastSize = os.path.getsize(crDwnFileLastName)
+                continue
+
+            flist = os.listdir(self.downloadTmpDir)
+            if len(flist) > 0:
+                return os.path.join(self.downloadTmpDir, flist[0])
+
+            if noFileCount > 30:
+                return None
+            noFileCount += 1
+
+            time.sleep(1)
 
 
 class _Util:
@@ -204,7 +239,6 @@ class _SeleniumWebDriver:
             "download.prompt_for_download": False,
         })
         self.driver = selenium.webdriver.Chrome(options=options)
-        self.downloadDir = downloadDir
 
     def __enter__(self):
         return self.driver
@@ -212,39 +246,6 @@ class _SeleniumWebDriver:
     def __exit__(self, type, value, traceback):
         self.driver.quit()
         self.driver = None
-
-    def waitDownloadComplete(self):
-        crDwnFileLastName = ""
-        crDwnFileLastSize = -1
-        crDwnFileSizeEqualCount = 0
-        noFileCount = 0
-
-        while True:
-            flist = glob.glob(os.path.join(self.downloadDir, "*.crdownload"))
-            if len(flist) > 0:
-                if crDwnFileLastName == flist[0]:
-                    sz = os.path.getsize(flist[0])
-                    if crDwnFileLastSize == sz:
-                        if crDwnFileSizeEqualCount > 30:
-                            return None         # file size have not changed for 30 seconds, download failed
-                        crDwnFileSizeEqualCount += 1
-                    else:
-                        crDwnFileLastSize = sz
-                        crDwnFileSizeEqualCount = 0
-                else:
-                    crDwnFileLastName = flist[0]
-                    crDwnFileLastSize = os.path.getsize(crDwnFileLastName)
-                continue
-
-            flist = os.listdir(self.downloadDir)
-            if len(flist) > 0:
-                return os.path.join(self.downloadDir, flist[0])
-
-            if noFileCount > 30:
-                return None
-            noFileCount += 1
-
-            time.sleep(1)
 
 
 ###############################################################################

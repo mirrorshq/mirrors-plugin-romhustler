@@ -28,7 +28,7 @@ def main():
         dataDir = sys.argv[1]
         downloadTmpDir = os.path.join(dataDir, "_tmp")
         logDir = sys.argv[3]
-        isDebug = os.environ.get("MIRRORS_PLUGIN_DEBUG") is not None and os.environ.get("MIRRORS_PLUGIN_DEBUG") != "0"
+        isDebug = (sys.argv[4] == "1")
         mainUrl = "https://romhustler.org/roms"
 
         # download popular games

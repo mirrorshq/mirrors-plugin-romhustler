@@ -9,6 +9,7 @@ import json
 import shutil
 import random
 import socket
+import tempfile
 import subprocess
 import selenium.common
 import selenium.webdriver
@@ -25,7 +26,6 @@ def main():
         popularGameListFile = os.path.join(selfDir, "games_popular.txt")
         badGameListFile = os.path.join(selfDir, "games_bad.txt")
         dataDir = sys.argv[1]
-        downloadTmpDir = os.path.join(dataDir, "_tmp")
         logDir = sys.argv[2]
         isDebug = (sys.argv[3] == "1")
         mainUrl = "https://romhustler.org/roms"
@@ -37,21 +37,18 @@ def main():
         for gameId in gameIdList:
             targetDir = os.path.join(dataDir, gameId)
             if not os.path.exists(targetDir):
-                _Util.ensureDir(downloadTmpDir)
-                romName, romFile = _downloadOneGame(gameId, os.path.join(romUrlPrefix, gameId), isDebug, downloadTmpDir)
-                if romName is not None:
-                    if romFile is not None:
-                        # update target directory
+                with _GameDownloader(isDebug) as obj:
+                    try:
+                        romName, romFile = obj.download(gameId, os.path.join(romUrlPrefix, gameId))
                         _Util.ensureDir(targetDir)
                         os.rename(romFile, os.path.join(targetDir, os.path.basename(romFile)))
                         print("Popular game %s downloaded." % (gameId))
-                    else:
+                    except _GameDownloader.BadUrlError:
+                        print("Popular game %s does not exists." % (gameId))
+                    except _GameDownloader.NotAvailableError:
+                        print("Popular game %s is not available for download." % (gameId))
+                    except _GameDownloader.DownloadFailedError:
                         print("Popular game %s is not successfully downloaded." % (gameId))
-                else:
-                    # download is not available
-                    print("Popular game %s is not available for download." % (gameId))
-                    pass
-                shutil.rmtree(downloadTmpDir)
             i += 1
             _Util.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
 
@@ -78,35 +75,63 @@ def _readGameListFile(filename):
     return gameIdList
 
 
-def _downloadOneGame(gameId, gameUrl, isDebug, downloadTmpDir):
-    with _SeleniumWebDriver(isDebug, downloadTmpDir) as driver:
-        # load game page
-        driver.get(gameUrl)
+class _GameDownloader:
 
-        # check if we can download this rom
-        try:
-            atag = driver.find_element_by_xpath("//div[contains(text(), \"download is disabled\")]")
-            return (None, None)
-        except selenium.common.exceptions.NoSuchElementException:
-            pass
+    class BadUrlError(Exception):
+        pass
 
-        # get game name
-        romName = driver.find_element_by_xpath("//h1[@itemprop=\"name\"]").text
+    class NotAvailableError(Exception):
+        pass
 
-        # load download page, click to download
-        driver.find_element_by_link_text("Click here to download this rom").click()
-        while True:
-            time.sleep(1)
+    class DownloadFailedError(Exception):
+        pass
+
+    def __init__(self, isDebug):
+        self.isDebug = isDebug
+        self.downloadTmpDir = tempfile.mkdtemp()
+        _Util.ensureDir(self.downloadTmpDir)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, type, value, traceback):
+        shutil.rmtree(self.downloadTmpDir)
+        del self.downloadTmpDir
+        del self.isDebug
+
+    def download(self, gameId, gameUrl):
+        with _SeleniumWebDriver(self.isDebug, self.downloadTmpDir) as driver:
+            # load game page
+            driver.get(gameUrl)
+            if driver.current_url != gameUrl:
+                raise self.BadUrlError()
+
+            # check if we can download this rom
             try:
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
-                atag = driver.find_element_by_link_text("here")
-                atag.click()
-                break
+                atag = driver.find_element_by_xpath("//div[contains(text(), \"download is disabled\")]")
+                raise self.NotAvailableError()
             except selenium.common.exceptions.NoSuchElementException:
                 pass
-        romFile = driver.waitDownloadComplete()
 
-        return (romName, romFile)
+            # get game name
+            romName = driver.find_element_by_xpath("//h1[@itemprop=\"name\"]").text
+
+            # load download page, click to download
+            driver.find_element_by_link_text("Click here to download this rom").click()
+            while True:
+                time.sleep(1)
+                try:
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+                    atag = driver.find_element_by_link_text("here")
+                    atag.click()
+                    break
+                except selenium.common.exceptions.NoSuchElementException:
+                    pass
+            romFile = driver.waitDownloadComplete()
+            if romFile is None:
+                raise self.DownloadFailedError()
+
+            return (romName, romFile)
 
 
 class _Util:

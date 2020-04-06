@@ -43,8 +43,8 @@ nes/teenage-mutant-ninja-turtles-ii-the-arcade-game
 nes/teenage-mutant-ninja-turtles3
 nes/twinbee
 neogeo/metal-slug
-neogeo/metal-slug2
-neogeo/metal-slug3
-neogeo/metal-slug4
-neogeo/metal-slug5
-neogeo/metal-slug6
+neogeo/metal-slug-2
+neogeo/metal-slug-3
+neogeo/metal-slug-4
+neogeo/metal-slug-5
+neogeo/metal-slug-6

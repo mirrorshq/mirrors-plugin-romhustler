@@ -2,7 +2,6 @@
 # -*- coding: utf-8; tab-width: 4; indent-tabs-mode: t -*-
 
 import os
-import re
 import sys
 import glob
 import time
@@ -41,10 +40,13 @@ def main():
                 _Util.ensureDir(downloadTmpDir)
                 romName, romFile = _downloadOneGame(gameId, os.path.join(romUrlPrefix, gameId), isDebug, downloadTmpDir)
                 if romName is not None:
-                    # update target directory
-                    _Util.ensureDir(targetDir)
-                    os.rename(romFile, os.path.join(targetDir, os.path.basename(romFile)))
-                    print("Popular game %s downloaded." % (gameId))
+                    if romFile is not None:
+                        # update target directory
+                        _Util.ensureDir(targetDir)
+                        os.rename(romFile, os.path.join(targetDir, os.path.basename(romFile)))
+                        print("Popular game %s downloaded." % (gameId))
+                    else:
+                        print("Popular game %s is not successfully downloaded." % (gameId))
                 else:
                     # download is not available
                     print("Popular game %s is not available for download." % (gameId))
@@ -59,7 +61,7 @@ def main():
 
         # report full progress
         _Util.progress_changed(sock, 100)
-    except:
+    except Exception:
         _Util.error_occured(sock, sys.exc_info())
         raise
     finally:
@@ -102,11 +104,7 @@ def _downloadOneGame(gameId, gameUrl, isDebug, downloadTmpDir):
                 break
             except selenium.common.exceptions.NoSuchElementException:
                 pass
-
-        # wait download complete
-        while not (len(os.listdir(downloadTmpDir)) > 0 and len(glob.glob(os.path.join(downloadTmpDir, "*.crdownload"))) == 0):
-            time.sleep(1)
-        romFile = os.path.join(downloadTmpDir, os.listdir(downloadTmpDir)[0])
+        romFile = driver.waitDownloadComplete()
 
         return (romName, romFile)
 
@@ -181,12 +179,47 @@ class _SeleniumWebDriver:
             "download.prompt_for_download": False,
         })
         self.driver = selenium.webdriver.Chrome(options=options)
+        self.downloadDir = downloadDir
 
     def __enter__(self):
         return self.driver
 
     def __exit__(self, type, value, traceback):
-        self.driver.close()
+        self.driver.quit()
+        self.driver = None
+
+    def waitDownloadComplete(self):
+        crDwnFileLastName = ""
+        crDwnFileLastSize = -1
+        crDwnFileSizeEqualCount = 0
+        noFileCount = 0
+
+        while True:
+            flist = glob.glob(os.path.join(self.downloadDir, "*.crdownload"))
+            if len(flist) > 0:
+                if crDwnFileLastName == flist[0]:
+                    sz = os.path.getsize(flist[0])
+                    if crDwnFileLastSize == sz:
+                        if crDwnFileSizeEqualCount > 30:
+                            return None         # file size have not changed for 30 seconds, download failed
+                        crDwnFileSizeEqualCount += 1
+                    else:
+                        crDwnFileLastSize = sz
+                        crDwnFileSizeEqualCount = 0
+                else:
+                    crDwnFileLastName = flist[0]
+                    crDwnFileLastSize = os.path.getsize(crDwnFileLastName)
+                continue
+
+            flist = os.listdir(self.downloadDir)
+            if len(flist) > 0:
+                return os.path.join(self.downloadDir, flist[0])
+
+            if noFileCount > 30:
+                return None
+            noFileCount += 1
+
+            time.sleep(1)
 
 
 ###############################################################################

@@ -55,9 +55,30 @@ def main():
             i += 1
             _Util.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
 
-        # download or update some games randomly
-        gameNumber = random.randint(10, 100)
+        # download some games randomly
+        gameIdList = _readGameListFromWebSite(mainUrl, dataDir, random.randint(10, 100),
+                                              _readGameListFile(badGameListFile), isDebug)
+        print(gameIdList)   # FIXME
         i = 0
+        for gameId in gameIdList:
+            targetDir = os.path.join(dataDir, gameId)
+            with _GameDownloader(isDebug) as obj:
+                try:
+                    romName, romFile = obj.download(gameId, os.path.join(romUrlPrefix, gameId))
+                    _Util.ensureDir(targetDir)
+                    shutil.move(romFile, targetDir)
+                    print("Game %s downloaded." % (gameId))
+                except _GameDownloader.BadUrlError:
+                    print("Game %s does not exists." % (gameId))
+                except _GameDownloader.NotAvailableError:
+                    print("Game %s is not available for download." % (gameId))
+                except _GameDownloader.DownloadFailedError:
+                    print("Game %s is not successfully downloaded." % (gameId))
+                except Exception:
+                    print("Unknown error occured when downloading game %s." % (gameId))
+                    pass
+            i += 1
+            _Util.progress_changed(sock, PROGRESS_STAGE_1 + PROGRESS_STAGE_2 * i // len(gameIdList))
 
         # report full progress
         _Util.progress_changed(sock, 100)
@@ -76,6 +97,22 @@ def _readGameListFile(filename):
             if line != "" and not line.startswith("#"):
                 gameIdList.append(line)
     return gameIdList
+
+
+def _readGameListFromWebSite(mainUrl, dataDir, gameCount, blackList, isDebug):
+    gameIdList = []
+    with _SeleniumWebDriver(isDebug) as driver:
+        driver.get(mainUrl)                                                         # get first page
+        while True:
+            for atag in driver.find_elements_by_xpath('//div[@class="title"]/a'):
+                gameId = atag.href.replace("/rom/")
+                if not os.path.exists(os.path.join(dataDir, gameId)):
+                    gameIdList.append(gameId)
+                    if len(gameIdList) >= gameCount:
+                        return gameIdList
+            time.sleep(1.0)
+            atag = driver.find_element_by_xpath('//a[text()="next>"]')              # get next page
+            atag.click()
 
 
 class _GameDownloader:
@@ -228,13 +265,13 @@ class _Util:
 
 class _SeleniumWebDriver:
 
-    def __init__(self, isDebug, downloadDir):
+    def __init__(self, isDebug, downloadDir=None):
         options = selenium.webdriver.chrome.options.Options()
         if not isDebug:
             options.add_argument('--headless')
         options.add_argument('--no-sandbox')
         options.add_experimental_option("prefs", {
-            "download.default_directory": downloadDir,
+            "download.default_directory": os.getcwd() if downloadDir is None else downloadDir,
             "download.prompt_for_download": False,
         })
         self.driver = selenium.webdriver.Chrome(options=options)

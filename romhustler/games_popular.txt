@@ -11,7 +11,8 @@ nes/bubble-bobble
 nes/castlevania-1
 nes/castlevania-ii-simons-quest
 nes/castlevania-iii-draculas-curse
-nes/chip-n-dale-rescue-rangers2
+nes/chip-n-dale-rescue-rangers
+nes/chip-n-dale-rescue-rangers-2
 nes/circus-charlie
 nes/contra
 nes/dig-dug

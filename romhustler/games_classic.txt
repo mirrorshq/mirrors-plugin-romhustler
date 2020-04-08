@@ -35,6 +35,7 @@ nes/mega-man-6
 nes/ninja-gaiden-1
 nes/ninja-gaiden-3-the-ancient-ship-of-doom
 nes/pac-man
+nes/pinball
 nes/road-fighter
 nes/super-c
 nes/super-contra-3

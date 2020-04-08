@@ -99,11 +99,12 @@ def _readGameListFromWebSite(mainUrl, dataDir, pageCount, blackList, isDebug):
             for atag in cobj.driver.find_elements_by_xpath('//div[@class="title"]/a'):
                 gameId = "/".join(atag.get_attribute("href").split("/")[-2:])           # "https://romhustler.org/rom/ps2/god-of-war-usa" -> "ps2/god-of-war-usa"
                 gameIdList.append(gameId)
-            time.sleep(1.0)
-            for atag in cobj.driver.find_elements_by_xpath("//a"):
-                if atag.text == "next>":                                                # find_element_by_xpath('//a[text()="next>"]') has no effect, don't know why
-                    atag.click()
-                    break
+            if i < pageCount - 1:
+                time.sleep(1.0)
+                for atag in cobj.driver.find_elements_by_xpath("//a"):
+                    if atag.text == "next>":                                            # get next page, find_element_by_xpath('//a[text()="next>"]') has no effect, don't know why
+                        atag.click()
+                        break
     return gameIdList
 
 
@@ -175,9 +176,9 @@ class _GameDownloader:
         # save to target directory
         Util.ensureDir(targetDir)
         shutil.move(filename, targetDir)
-        with open(os.path.join(targetDir, "ROM_NAME.txt"), "W") as f:
+        with open(os.path.join(targetDir, "ROM_NAME.txt"), "w") as f:
             f.write(romName)
-        with open(os.path.join(targetDir, "ROM_URL.txt"), "W") as f:
+        with open(os.path.join(targetDir, "ROM_URL.txt"), "w") as f:
             f.write(url)
         print("%s %s downloaded." % (gameTypename, gameId))
 

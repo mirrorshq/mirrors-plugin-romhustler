@@ -3,7 +3,6 @@
 
 import os
 import sys
-import glob
 import time
 import json
 import shutil
@@ -40,7 +39,7 @@ def main():
             if not os.path.exists(targetDir):
                 with _GameDownloader(isDebug) as obj:
                     try:
-                        romName, romFile = obj.download(gameId, os.path.join(romUrlPrefix, gameId))
+                        romName, romUrl, romFile = obj.download(gameId, os.path.join(romUrlPrefix, gameId))
                         Util.ensureDir(targetDir)
                         shutil.move(romFile, targetDir)
                         print("Classic game %s downloaded." % (gameId))
@@ -52,7 +51,7 @@ def main():
                         print("Classic game %s is not successfully downloaded." % (gameId))
                     except Exception:
                         print("Unknown error occured when downloading classic game %s." % (gameId))
-                        pass
+                        raise
             i += 1
             Util.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
 
@@ -66,7 +65,7 @@ def main():
                 if not os.path.exists(targetDir):
                     with _GameDownloader(isDebug) as obj:
                         try:
-                            romName, romFile = obj.download(gameId, os.path.join(romUrlPrefix, gameId))
+                            romName, romUrl, romFile = obj.download(gameId, os.path.join(romUrlPrefix, gameId))
                             Util.ensureDir(targetDir)
                             shutil.move(romFile, targetDir)
                             print("Popular game %s downloaded." % (gameId))
@@ -78,7 +77,7 @@ def main():
                             print("Popular game %s is not successfully downloaded." % (gameId))
                         except Exception:
                             print("Unknown error occured when downloading popular game %s." % (gameId))
-                            pass
+                            raise
                 i += 1
                 Util.progress_changed(sock, PROGRESS_STAGE_1 + PROGRESS_STAGE_2 * i // len(gameIdList))
 
@@ -103,15 +102,17 @@ def _readGameListFile(filename):
 
 def _readGameListFromWebSite(mainUrl, dataDir, pageCount, blackList, isDebug):
     gameIdList = []
-    with SeleniumChrome(isDebug) as driver:
-        driver.get(mainUrl)                                                         # get first page
+    with SeleniumChrome(isDebug) as cobj:
+        cobj.driver.get(mainUrl)                                                        # get first page
         for i in range(0, pageCount):
-            for atag in driver.find_elements_by_xpath('//div[@class="title"]/a'):
-                gameId = "/".join(atag.get_attribute("href").split("/")[-2:])       # "https://romhustler.org/rom/ps2/god-of-war-usa" -> "ps2/god-of-war-usa"
+            for atag in cobj.driver.find_elements_by_xpath('//div[@class="title"]/a'):
+                gameId = "/".join(atag.get_attribute("href").split("/")[-2:])           # "https://romhustler.org/rom/ps2/god-of-war-usa" -> "ps2/god-of-war-usa"
                 gameIdList.append(gameId)
             time.sleep(1.0)
-            atag = driver.find_element_by_xpath('//a[text()="next>"]')              # get next page
-            atag.click()
+            for atag in cobj.driver.find_elements_by_xpath("//a"):
+                if atag.text == "next>":                                                # find_element_by_xpath('//a[text()="next>"]') has no effect, don't know why
+                    atag.click()
+                    break
     return gameIdList
 
 
@@ -169,46 +170,23 @@ class _GameDownloader:
                     pass
 
             # wait download complete
-            romUrl, romFile = cobj.gotoDownloadManagerAndWaitDownloadComplete()
-            print(romUrl)
-            print(romFile)
+            cobj.gotoDownloadManagerAndWaitDownloadStart()
+            for i in range(0, 60):
+                time.sleep(1)
+                print("1 %d" % (cobj.getDownloadProgress()))
+                if cobj.getDownloadProgress() >= 100:
+                    return (romName, cobj.getDownloadUrl(), cobj.getDownloadFilePath())
+            if cobj.getDownloadProgress() >= 50:
+                while cobj.getDownloadProgress() < 100:
+                    print("2 %d" % (cobj.getDownloadProgress()))
+                    time.sleep(1)
+                return (romName, cobj.getDownloadUrl(), cobj.getDownloadFilePath())
 
-            return (romName, romFile)
-
-    def _waitDownloadComplete(self):
-        crDwnFileLastName = ""
-        crDwnFileLastSize = -1
-        crDwnFileSizeEqualCount = 0
-        noFileCount = 0
-
-        while True:
-            flist = glob.glob(os.path.join(self.downloadTmpDir, "*.crdownload"))
-            if len(flist) > 0:
-                if crDwnFileLastName == flist[0]:
-                    sz = os.path.getsize(flist[0])
-                    if crDwnFileLastSize == sz:
-                        if crDwnFileSizeEqualCount > 30:
-                            raise self.DownloadFailedError()    # file size have not changed for 30s, download failed
-                        crDwnFileSizeEqualCount += 1
-                        print(crDwnFileLastName + " stop %d" % (crDwnFileSizeEqualCount))
-                    else:
-                        crDwnFileLastSize = sz
-                        crDwnFileSizeEqualCount = 0
-                        print(crDwnFileLastName)
-                else:
-                    crDwnFileLastName = flist[0]
-                    crDwnFileLastSize = os.path.getsize(crDwnFileLastName)
-                    print(crDwnFileLastName + " new")
-            else:
-                flist = os.listdir(self.downloadTmpDir)
-                if len(flist) > 0:
-                    return os.path.join(self.downloadTmpDir, flist[0])
-                else:
-                    if noFileCount > 30:
-                        raise self.DownloadFailedError()
-                    noFileCount += 1
-                    print("no file %s %d" % (self.downloadTmpDir, noFileCount))
-            time.sleep(1)
+            # use wget to download FIXME
+            while cobj.getDownloadProgress() < 100:
+                print("3 %d" % (cobj.getDownloadProgress()))
+                time.sleep(1)
+            return (romName, cobj.getDownloadUrl(), cobj.getDownloadFilePath())
 
 
 class Util:
@@ -307,6 +285,43 @@ class SeleniumChrome:
         self.driver.quit()
         self.driver = None
 
+    def scrollToPageEnd(self):
+        self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+
+    def gotoDownloadManagerAndWaitDownloadStart(self):
+        self.driver.get("chrome://downloads/")
+        while self.driver.execute_script("return %s" % (self._downloadManagerSelector())) is None:
+            time.sleep(1)
+        while self.driver.execute_script("return %s" % (self._downloadFileSelector())) is None:
+            print("None")
+            time.sleep(1)
+        self.downloadUrl = self.driver.execute_script("return %s.shadowRoot.querySelector('div#content  #file-link').href" % (self._downloadFileSelector()))
+        self.downloadFilePath = os.path.join(self.downloadDir, self.driver.execute_script("return %s.shadowRoot.querySelector('div#content  #file-link').text" % (self._downloadFileSelector())))
+
+    def isInDownloadManager(self):
+        return self.driver.current_url == "chrome://downloads/"
+
+    def getDownloadUrl(self):
+        return self.downloadUrl
+
+    def getDownloadFilePath(self):
+        return self.downloadFilePath
+
+    def getDownloadProgress(self):
+        try:
+            return self.driver.execute_script("return %s.shadowRoot.querySelector('#progress').value" % (self._downloadFileSelector()))
+        except selenium.common.exceptions.WebDriverException:
+            # it's weird that chrome auto close after download complete
+            # so we get this exception "selenium.common.exceptions.WebDriverException: Message: chrome not reachable"
+            return 100
+
+    def cancelDownload(self):
+        assert self.isInDownloadManager()
+        self.driver.execute_script("%s.shadowRoot.querySelector('cr-button[focus-type=\"cancel\"]').click()" % (self._downloadFileSelector()))
+
+    def removeDownload(self):
+        self.driver.execute_script("%s.shadowRoot.querySelector('cr-icon-button').click()" % (self._downloadFileSelector()))
+
     def _enableDownloadInHeadlessChrome(self):
         """
         there is currently a "feature" in chrome where
@@ -319,42 +334,13 @@ class SeleniumChrome:
         self.driver.command_executor._commands["send_command"] = ("POST", '/session/$sessionId/chromium/send_command')
 
         params = {'cmd': 'Page.setDownloadBehavior', 'params': {'behavior': 'allow', 'downloadPath': self.downloadDir}}
-        command_result = self.driver.execute("send_command", params)
-        print(self.downloadDir)
-        print("response from browser:")
-        for key in command_result:
-            print("result:" + key + ":" + str(command_result[key]))
+        self.driver.execute("send_command", params)
 
-    def gotoDownloadManagerAndGetDownloadUrlAndCancelDownload(self):
-        pass
+    def _downloadManagerSelector(self):
+        return "document.querySelector('downloads-manager')"
 
-    def gotoDownloadManagerAndWaitDownloadComplete(self, progressFunc=None):
-        # Returns (download-url, downloaded-file-absolute-path)
-
-        self.driver.get("chrome://downloads")
-        lastPercentage = -1
-        while True:
-            time.sleep(1)
-            try:
-                # get downloaded percentage
-                downloadPercentage = self.driver.execute_script("return document.querySelector('downloads-manager').shadowRoot.querySelector('#downloadsList downloads-item').shadowRoot.querySelector('#progress').value")
-                # report progress
-                if downloadPercentage != lastPercentage:
-                    if progressFunc is not None:
-                        progressFunc(downloadPercentage)
-                    lastPercentage = downloadPercentage
-                # check if downloadPercentage is 100 (otherwise the script will keep waiting)
-                if downloadPercentage == 100:
-                    # return the file name once the download is completed
-                    realUrl = self.driver.execute_script("return document.querySelector('downloads-manager').shadowRoot.querySelector('#downloadsList downloads-item').shadowRoot.querySelector('div#content  #file-link').href")
-                    downloadedFile = self.driver.execute_script("return document.querySelector('downloads-manager').shadowRoot.querySelector('#downloadsList downloads-item').shadowRoot.querySelector('div#content  #file-link').text")
-                    break
-            except Exception:
-                pass
-        return (realUrl, downloadedFile)
-
-    def scrollToPageEnd(self):
-        self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+    def _downloadFileSelector(self):
+        return "%s.shadowRoot.querySelector('#downloadsList downloads-item')" % (self._downloadManagerSelector())
 
 
 ###############################################################################

@@ -312,7 +312,7 @@ class SeleniumChrome:
             return self.driver.execute_script("return %s.shadowRoot.querySelector('#progress').value" % (self._downloadFileSelector()))
         except selenium.common.exceptions.WebDriverException:
             # it's weird that chrome auto close after download complete
-            # so we get this exception "selenium.common.exceptions.WebDriverException: Message: chrome not reachable"
+            # so this exception "selenium.common.exceptions.WebDriverException: Message: chrome not reachable" means progress 100
             return 100
 
     def cancelDownload(self):

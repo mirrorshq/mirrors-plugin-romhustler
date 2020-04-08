@@ -9,6 +9,7 @@ import shutil
 import random
 import socket
 import tempfile
+import traceback
 import subprocess
 import selenium.common
 import selenium.webdriver
@@ -39,24 +40,14 @@ def main():
             if not os.path.exists(targetDir):
                 with _GameDownloader(isDebug) as obj:
                     try:
-                        romName, romUrl, romFile = obj.download(gameId, os.path.join(romUrlPrefix, gameId))
-                        Util.ensureDir(targetDir)
-                        shutil.move(romFile, targetDir)
-                        print("Classic game %s downloaded." % (gameId))
-                    except _GameDownloader.BadUrlError:
-                        print("Classic game %s does not exists." % (gameId))
-                    except _GameDownloader.NotAvailableError:
-                        print("Classic game %s is not available for download." % (gameId))
-                    except _GameDownloader.DownloadFailedError:
-                        print("Classic game %s is not successfully downloaded." % (gameId))
+                        obj.download(targetDir, "Classic game", gameId, os.path.join(romUrlPrefix, gameId))
                     except Exception:
-                        print("Unknown error occured when downloading classic game %s." % (gameId))
-                        raise
+                        print(traceback.format_exc())
             i += 1
             Util.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
 
         # download popular games
-        if Util.getInitOrUpdate():
+        if _getInitOrUpdate():
             gameIdList = _readGameListFromWebSite(mainUrl, dataDir, POPULAR_GAME_PAGE_COUNT,
                                                   _readGameListFile(badGameListFile), isDebug)
             i = 0
@@ -65,19 +56,9 @@ def main():
                 if not os.path.exists(targetDir):
                     with _GameDownloader(isDebug) as obj:
                         try:
-                            romName, romUrl, romFile = obj.download(gameId, os.path.join(romUrlPrefix, gameId))
-                            Util.ensureDir(targetDir)
-                            shutil.move(romFile, targetDir)
-                            print("Popular game %s downloaded." % (gameId))
-                        except _GameDownloader.BadUrlError:
-                            print("Popular game %s does not exists." % (gameId))
-                        except _GameDownloader.NotAvailableError:
-                            print("Popular game %s is not available for download." % (gameId))
-                        except _GameDownloader.DownloadFailedError:
-                            print("Popular game %s is not successfully downloaded." % (gameId))
+                            obj.download(targetDir, "Popular game", gameId, os.path.join(romUrlPrefix, gameId))
                         except Exception:
-                            print("Unknown error occured when downloading popular game %s." % (gameId))
-                            raise
+                            print(traceback.format_exc())
                 i += 1
                 Util.progress_changed(sock, PROGRESS_STAGE_1 + PROGRESS_STAGE_2 * i // len(gameIdList))
 
@@ -88,6 +69,16 @@ def main():
         raise
     finally:
         sock.close()
+
+
+def _getInitOrUpdate():
+    if len(sys.argv) == 6:
+        return True
+    elif len(sys.argv) == 7:
+        return False
+    else:
+        print(len(sys.argv))
+        assert False
 
 
 def _readGameListFile(filename):
@@ -140,17 +131,22 @@ class _GameDownloader:
         del self.downloadTmpDir
         del self.isDebug
 
-    def download(self, gameId, gameUrl):
+    def download(self, targetDir, gameTypename, gameId, gameUrl):
+        romName = None
+        url = None
+        filename = None
         with SeleniumChrome(self.isDebug, self.downloadTmpDir) as cobj:
             # load game page
             cobj.driver.get(gameUrl)
             if cobj.driver.current_url != gameUrl:
-                raise self.BadUrlError()
+                print("%s %s does not exists." % (gameTypename, gameId))
+                return
 
             # check if we can download this rom
             try:
                 atag = cobj.driver.find_element_by_xpath("//div[contains(text(), \"download is disabled\")]")
-                raise self.NotAvailableError()
+                print("%s %s is not available for download." % (gameTypename, gameId))
+                return
             except selenium.common.exceptions.NoSuchElementException:
                 pass
 
@@ -169,37 +165,63 @@ class _GameDownloader:
                 except selenium.common.exceptions.NoSuchElementException:
                     pass
 
-            # wait download complete
-            cobj.gotoDownloadManagerAndWaitDownloadStart()
-            for i in range(0, 60):
-                time.sleep(1)
-                print("1 %d" % (cobj.getDownloadProgress()))
-                if cobj.getDownloadProgress() >= 100:
-                    return (romName, cobj.getDownloadUrl(), cobj.getDownloadFilePath())
-            if cobj.getDownloadProgress() >= 50:
-                while cobj.getDownloadProgress() < 100:
-                    print("2 %d" % (cobj.getDownloadProgress()))
-                    time.sleep(1)
-                return (romName, cobj.getDownloadUrl(), cobj.getDownloadFilePath())
+            # get download information
+            url, filename = cobj.gotoDownloadManagerAndGetDownloadInfo()
+            filename = os.path.join(self.downloadTmpDir, filename)
 
-            # use wget to download FIXME
-            while cobj.getDownloadProgress() < 100:
-                print("3 %d" % (cobj.getDownloadProgress()))
-                time.sleep(1)
-            return (romName, cobj.getDownloadUrl(), cobj.getDownloadFilePath())
+        # use wget to download
+        Util.wgetDownload(url, filename)
+
+        # save to target directory
+        Util.ensureDir(targetDir)
+        shutil.move(filename, targetDir)
+        with open(os.path.join(targetDir, "ROM_NAME.txt"), "W") as f:
+            f.write(romName)
+        with open(os.path.join(targetDir, "ROM_URL.txt"), "W") as f:
+            f.write(url)
+        print("%s %s downloaded." % (gameTypename, gameId))
 
 
 class Util:
 
     @staticmethod
-    def getInitOrUpdate():
-        if len(sys.argv) == 6:
-            return True
-        elif len(sys.argv) == 7:
-            return False
+    def readFile(filename):
+        with open(filename) as f:
+            return f.read()
+
+    @staticmethod
+    def cmdExec(cmd, *kargs):
+        # call command to execute frontend job
+        #
+        # scenario 1, process group receives SIGTERM, SIGINT and SIGHUP:
+        #   * callee must auto-terminate, and cause no side-effect
+        #   * caller must be terminate AFTER child-process, and do neccessary finalization
+        #   * termination information should be printed by callee, not caller
+        # scenario 2, caller receives SIGTERM, SIGINT, SIGHUP:
+        #   * caller should terminate callee, wait callee to stop, do neccessary finalization, print termination information, and be terminated by signal
+        #   * callee does not need to treat this scenario specially
+        # scenario 3, callee receives SIGTERM, SIGINT, SIGHUP:
+        #   * caller detects child-process failure and do appopriate treatment
+        #   * callee should print termination information
+
+        # FIXME, the above condition is not met, FmUtil.shellExec has the same problem
+
+        ret = subprocess.run([cmd] + list(kargs), universal_newlines=True)
+        if ret.returncode > 128:
+            time.sleep(1.0)
+        ret.check_returncode()
+
+    @staticmethod
+    def wgetDownload(url, localFile=None):
+        param = Util.wgetCommonDownloadParam().split()
+        if localFile is None:
+            Util.cmdExec("/usr/bin/wget", *param, url)
         else:
-            print(len(sys.argv))
-            assert False
+            Util.cmdExec("/usr/bin/wget", *param, "-O", localFile, url)
+
+    @staticmethod
+    def wgetCommonDownloadParam():
+        return "-t 0 -w 60 --random-wait -T 60 --passive-ftp"
 
     @staticmethod
     def connect():
@@ -237,7 +259,7 @@ class Util:
     @staticmethod
     def shellCall(cmd):
         # call command with shell to execute backstage job
-        # scenarios are the same as FmUtil.cmdCall
+        # scenarios are the same as Util.cmdCall
 
         ret = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              shell=True, universal_newlines=True)
@@ -259,14 +281,13 @@ class Util:
 
 class SeleniumChrome:
 
-    def __init__(self, isDebug, downloadDir=None):
+    def __init__(self, showUi, downloadDir=None):
         self.downloadDir = os.getcwd() if downloadDir is None else downloadDir
 
         options = selenium.webdriver.chrome.options.Options()
-        if not isDebug:
+        if not showUi:
             options.add_argument('--headless')
         options.add_argument('--no-sandbox')                    # FIXME
-        options.add_argument("--disable-gpu")
         options.add_experimental_option("prefs", {
             "download.default_directory": self.downloadDir,
             "download.prompt_for_download": False,
@@ -288,39 +309,24 @@ class SeleniumChrome:
     def scrollToPageEnd(self):
         self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
 
-    def gotoDownloadManagerAndWaitDownloadStart(self):
+    def gotoDownloadManagerAndGetDownloadInfo(self):
+        # return (url, filename)
+
+        # goto download manager page
         self.driver.get("chrome://downloads/")
         while self.driver.execute_script("return %s" % (self._downloadManagerSelector())) is None:
             time.sleep(1)
         while self.driver.execute_script("return %s" % (self._downloadFileSelector())) is None:
-            print("None")
             time.sleep(1)
-        self.downloadUrl = self.driver.execute_script("return %s.shadowRoot.querySelector('div#content  #file-link').href" % (self._downloadFileSelector()))
-        self.downloadFilePath = os.path.join(self.downloadDir, self.driver.execute_script("return %s.shadowRoot.querySelector('div#content  #file-link').text" % (self._downloadFileSelector())))
 
-    def isInDownloadManager(self):
-        return self.driver.current_url == "chrome://downloads/"
+        # get information
+        url = self.driver.execute_script("return %s.shadowRoot.querySelector('div#content  #file-link').href" % (self._downloadFileSelector()))
+        filename = self.driver.execute_script("return %s.shadowRoot.querySelector('div#content  #file-link').text" % (self._downloadFileSelector()))
 
-    def getDownloadUrl(self):
-        return self.downloadUrl
-
-    def getDownloadFilePath(self):
-        return self.downloadFilePath
-
-    def getDownloadProgress(self):
-        try:
-            return self.driver.execute_script("return %s.shadowRoot.querySelector('#progress').value" % (self._downloadFileSelector()))
-        except selenium.common.exceptions.WebDriverException:
-            # it's weird that chrome auto close after download complete
-            # so this exception "selenium.common.exceptions.WebDriverException: Message: chrome not reachable" means progress 100
-            return 100
-
-    def cancelDownload(self):
-        assert self.isInDownloadManager()
+        # cancel download
         self.driver.execute_script("%s.shadowRoot.querySelector('cr-button[focus-type=\"cancel\"]').click()" % (self._downloadFileSelector()))
 
-    def removeDownload(self):
-        self.driver.execute_script("%s.shadowRoot.querySelector('cr-icon-button').click()" % (self._downloadFileSelector()))
+        return (url, filename)
 
     def _enableDownloadInHeadlessChrome(self):
         """
@@ -347,3 +353,39 @@ class SeleniumChrome:
 
 if __name__ == "__main__":
     main()
+
+
+# def gotoDownloadManagerAndWaitDownloadStart(self):
+#     self.driver.get("chrome://downloads/")
+#     while self.driver.execute_script("return %s" % (self._downloadManagerSelector())) is None:
+#         time.sleep(1)
+#     while self.driver.execute_script("return %s" % (self._downloadFileSelector())) is None:
+#         print("None")
+#         time.sleep(1)
+#     self.downloadUrl = self.driver.execute_script("return %s.shadowRoot.querySelector('div#content  #file-link').href" % (self._downloadFileSelector()))
+#     self.downloadFilePath = os.path.join(self.downloadDir, self.driver.execute_script("return %s.shadowRoot.querySelector('div#content  #file-link').text" % (self._downloadFileSelector())))
+
+# def isInDownloadManager(self):
+#     return self.driver.current_url == "chrome://downloads/"
+
+# def getDownloadUrl(self):
+#     return self.downloadUrl
+
+# def getDownloadFilePath(self):
+#     return self.downloadFilePath
+
+# def getDownloadProgress(self):
+#     try:
+#         return self.driver.execute_script("return %s.shadowRoot.querySelector('#progress').value" % (self._downloadFileSelector()))
+#     except selenium.common.exceptions.WebDriverException:
+#         # it's weird that chrome auto close after download complete
+#         # so this exception "selenium.common.exceptions.WebDriverException: Message: chrome not reachable" means progress 100
+#         return 100
+
+# def cancelDownload(self):
+#     assert self.isInDownloadManager()
+#     self.driver.execute_script("%s.shadowRoot.querySelector('cr-button[focus-type=\"cancel\"]').click()" % (self._downloadFileSelector()))
+
+# def removeDownload(self):
+#     self.driver.execute_script("%s.shadowRoot.querySelector('cr-icon-button').click()" % (self._downloadFileSelector()))
+

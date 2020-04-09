@@ -21,7 +21,7 @@ PROGRESS_STAGE_2 = 50
 
 
 def main():
-    sock = Util.connect()
+    sock = MSock.connect()
     try:
         selfDir = os.path.dirname(os.path.realpath(__file__))
         classicGameListFile = os.path.join(selfDir, "games_classic.txt")
@@ -44,7 +44,7 @@ def main():
                     except Exception:
                         print(traceback.format_exc())
             i += 1
-            Util.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
+            MSock.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
 
         # download popular games
         if _getInitOrUpdate():
@@ -60,12 +60,12 @@ def main():
                         except Exception:
                             print(traceback.format_exc())
                 i += 1
-                Util.progress_changed(sock, PROGRESS_STAGE_1 + PROGRESS_STAGE_2 * i // len(gameIdList))
+                MSock.progress_changed(sock, PROGRESS_STAGE_1 + PROGRESS_STAGE_2 * i // len(gameIdList))
 
         # report full progress
-        Util.progress_changed(sock, 100)
+        MSock.progress_changed(sock, 100)
     except Exception:
-        Util.error_occured(sock, sys.exc_info())
+        MSock.error_occured(sock, sys.exc_info())
         raise
     finally:
         sock.close()
@@ -109,15 +109,6 @@ def _readGameListFromWebSite(mainUrl, dataDir, pageCount, blackList, isDebug):
 
 
 class _GameDownloader:
-
-    class BadUrlError(Exception):
-        pass
-
-    class NotAvailableError(Exception):
-        pass
-
-    class DownloadFailedError(Exception):
-        pass
 
     def __init__(self, isDebug):
         self.isDebug = isDebug
@@ -171,16 +162,43 @@ class _GameDownloader:
             filename = os.path.join(self.downloadTmpDir, filename)
 
         # use wget to download
+        with open(os.path.join(self.downloadTmpDir, "ROM_NAME.txt"), "w") as f:
+            f.write(romName)
+        with open(os.path.join(self.downloadTmpDir, "ROM_URL.txt"), "w") as f:
+            f.write(url)
         Util.wgetDownload(url, filename)
 
         # save to target directory
         Util.ensureDir(targetDir)
-        shutil.move(filename, targetDir)
-        with open(os.path.join(targetDir, "ROM_NAME.txt"), "w") as f:
-            f.write(romName)
-        with open(os.path.join(targetDir, "ROM_URL.txt"), "w") as f:
-            f.write(url)
+        Util.shellCall("/bin/mv * %s" % (targetDir))
         print("%s %s downloaded." % (gameTypename, gameId))
+
+
+class MSock:
+
+    @staticmethod
+    def connect():
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect("/run/mirrors/api.socket")
+        return sock
+
+    @staticmethod
+    def progress_changed(sock, progress):
+        sock.send(json.dumps({
+            "message": "progress",
+            "data": {
+                "progress": progress,
+            },
+        }).encode("utf-8"))
+
+    @staticmethod
+    def error_occured(sock, exc_info):
+        sock.send(json.dumps({
+            "message": "error_occured",
+            "data": {
+                "exc_info": "abc",
+            },
+        }).encode("utf-8"))
 
 
 class Util:
@@ -225,30 +243,6 @@ class Util:
         return "-t 0 -w 60 --random-wait -T 60 --passive-ftp"
 
     @staticmethod
-    def connect():
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.connect("/run/mirrors/api.socket")
-        return sock
-
-    @staticmethod
-    def progress_changed(sock, progress):
-        sock.send(json.dumps({
-            "message": "progress",
-            "data": {
-                "progress": progress,
-            },
-        }).encode("utf-8"))
-
-    @staticmethod
-    def error_occured(sock, exc_info):
-        sock.send(json.dumps({
-            "message": "error_occured",
-            "data": {
-                "exc_info": "abc",
-            },
-        }).encode("utf-8"))
-
-    @staticmethod
     def randomSorted(tlist):
         return sorted(tlist, key=lambda x: random.random())
 
@@ -270,14 +264,6 @@ class Util:
         if ret.returncode != 0:
             ret.check_returncode()
         return ret.stdout.rstrip()
-
-    @staticmethod
-    def shellCallWithRetCode(cmd):
-        ret = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             shell=True, universal_newlines=True)
-        if ret.returncode > 128:
-            time.sleep(1.0)
-        return (ret.returncode, ret.stdout.rstrip())
 
 
 class SeleniumChrome:

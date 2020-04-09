@@ -8,7 +8,6 @@ import json
 import shutil
 import random
 import socket
-import tempfile
 import traceback
 import subprocess
 import selenium.common
@@ -40,7 +39,7 @@ def main():
             if not os.path.exists(targetDir):
                 with _GameDownloader(isDebug) as obj:
                     try:
-                        obj.download(targetDir, "Classic game", gameId, os.path.join(romUrlPrefix, gameId))
+                        obj.download(dataDir, targetDir, "Classic game", gameId, os.path.join(romUrlPrefix, gameId))
                     except Exception:
                         print(traceback.format_exc())
             i += 1
@@ -56,7 +55,7 @@ def main():
                 if not os.path.exists(targetDir):
                     with _GameDownloader(isDebug) as obj:
                         try:
-                            obj.download(targetDir, "Popular game", gameId, os.path.join(romUrlPrefix, gameId))
+                            obj.download(dataDir, targetDir, "Popular game", gameId, os.path.join(romUrlPrefix, gameId))
                         except Exception:
                             print(traceback.format_exc())
                 i += 1
@@ -112,66 +111,92 @@ class _GameDownloader:
 
     def __init__(self, isDebug):
         self.isDebug = isDebug
-        self.downloadTmpDir = tempfile.mkdtemp()
-        Util.ensureDir(self.downloadTmpDir)
 
     def __enter__(self):
         return self
 
     def __exit__(self, type, value, traceback):
-        shutil.rmtree(self.downloadTmpDir)
-        del self.downloadTmpDir
-        del self.isDebug
+        pass
 
-    def download(self, targetDir, gameTypename, gameId, gameUrl):
-        romName = None
-        url = None
-        filename = None
-        with SeleniumChrome(self.isDebug, self.downloadTmpDir) as cobj:
-            # load game page
-            cobj.driver.get(gameUrl)
-            if cobj.driver.current_url != gameUrl:
-                print("%s %s does not exists." % (gameTypename, gameId))
-                return
+    def download(self, dataDir, targetDir, gameTypename, gameId, gameUrl):
+        self.downloadTmpDir = os.path.join(dataDir, "_tmp_" + gameId.replace("/", "_"))
+        Util.ensureDir(self.downloadTmpDir)
+        try:
+            romName = None
+            url = None
+            filename = None
+            with SeleniumChrome(self.isDebug, self.downloadTmpDir) as cobj:
+                # load game page
+                cobj.driver.get(gameUrl)
+                if cobj.driver.current_url != gameUrl:
+                    print("%s %s does not exists." % (gameTypename, gameId))
+                    return
 
-            # check if we can download this rom
-            try:
-                atag = cobj.driver.find_element_by_xpath("//div[contains(text(), \"download is disabled\")]")
-                print("%s %s is not available for download." % (gameTypename, gameId))
-                return
-            except selenium.common.exceptions.NoSuchElementException:
-                pass
-
-            # get game name
-            romName = cobj.driver.find_element_by_xpath("//h1[@itemprop=\"name\"]").text
-
-            # load download page, click to download
-            cobj.driver.find_element_by_link_text("Click here to download this rom").click()
-            while True:
-                time.sleep(1)
+                # check if we can download this rom
                 try:
-                    cobj.driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
-                    atag = cobj.driver.find_element_by_link_text("here")
-                    atag.click()
-                    break
+                    atag = cobj.driver.find_element_by_xpath("//div[contains(text(), \"download is disabled\")]")
+                    print("%s %s is not available for download." % (gameTypename, gameId))
+                    return
                 except selenium.common.exceptions.NoSuchElementException:
                     pass
 
-            # get download information
-            url, filename = cobj.gotoDownloadManagerAndGetDownloadInfo()
-            filename = os.path.join(self.downloadTmpDir, filename)
+                # get game name
+                romName = cobj.driver.find_element_by_xpath("//h1[@itemprop=\"name\"]").text
 
-        # use wget to download
-        with open(os.path.join(self.downloadTmpDir, "ROM_NAME.txt"), "w") as f:
-            f.write(romName)
-        with open(os.path.join(self.downloadTmpDir, "ROM_URL.txt"), "w") as f:
-            f.write(url)
-        Util.wgetDownload(url, filename)
+                # load download page, click to download
+                cobj.driver.find_element_by_link_text("Click here to download this rom").click()
+                while True:
+                    time.sleep(1)
+                    try:
+                        cobj.driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+                        atag = cobj.driver.find_element_by_link_text("here")
+                        atag.click()
+                        break
+                    except selenium.common.exceptions.NoSuchElementException:
+                        pass
 
-        # save to target directory
-        Util.ensureDir(targetDir)
-        Util.shellCall("/bin/mv * %s" % (targetDir))
-        print("%s %s downloaded." % (gameTypename, gameId))
+                # get download information
+                url, filename = cobj.gotoDownloadManagerAndGetDownloadInfo()
+
+            # do download
+            if self._freshDownloadNeeded(url, romName, filename):
+                Util.shellCall("/bin/rm -rf %s/*" % (self.downloadTmpDir))
+                with open(self._romNameFile(), "w") as f:
+                    f.write(romName)
+                with open(self._romUrlFile(), "w") as f:
+                    f.write(url)
+                Util.wgetDownload(url, os.path.join(self.downloadTmpDir, filename))
+            else:
+                Util.wgetDownload(url, os.path.join(self.downloadTmpDir, filename))
+
+            # save to target directory
+            Util.ensureDir(targetDir)
+            Util.shellCall("/bin/mv %s/* %s" % (self.downloadTmpDir, targetDir))
+            print("%s %s downloaded." % (gameTypename, gameId))
+
+            # remove download temp files only if everything is OK
+            shutil.rmtree(self.downloadTmpDir)
+        finally:
+            del self.downloadTmpDir
+
+    def _freshDownloadNeeded(self, romUrl, romName, filename):
+        if not os.path.exists(self._romUrlFile()):
+            return True
+        if Util.readFile(self._romUrlFile()) != romUrl:
+            return True
+        if not os.path.exists(self._romNameFile()):
+            return True
+        if Util.readFile(self._romNameFile()) != romName:
+            return True
+        if not os.path.exists(os.path.join(self.downloadTmpDir, filename)):
+            return True
+        return False
+
+    def _romNameFile(self):
+        return os.path.join(self.downloadTmpDir, "ROM_NAME")
+
+    def _romUrlFile(self):
+        return os.path.join(self.downloadTmpDir, "ROM_URL")
 
 
 class MSock:

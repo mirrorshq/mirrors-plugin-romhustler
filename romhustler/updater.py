@@ -161,13 +161,11 @@ class _GameDownloader:
             # do download
             if self._freshDownloadNeeded(url, romName, filename):
                 Util.shellCall("/bin/rm -rf %s/*" % (self.downloadTmpDir))
-                with open(self._romNameFile(), "w") as f:
+                with open(os.path.join(self.downloadTmpDir, "ROM_NAME"), "w") as f:
                     f.write(romName)
-                with open(self._romUrlFile(), "w") as f:
-                    f.write(url)
                 Util.wgetDownload(url, os.path.join(self.downloadTmpDir, filename))
             else:
-                Util.wgetDownload(url, os.path.join(self.downloadTmpDir, filename))
+                Util.wgetContinueDownload(url, os.path.join(self.downloadTmpDir, filename))
 
             # save to target directory
             Util.ensureDir(targetDir)
@@ -180,23 +178,16 @@ class _GameDownloader:
             del self.downloadTmpDir
 
     def _freshDownloadNeeded(self, romUrl, romName, filename):
-        if not os.path.exists(self._romUrlFile()):
+        fn = os.path.join(self.downloadTmpDir, "ROM_NAME")
+        if not os.path.exists(fn):
             return True
-        if Util.readFile(self._romUrlFile()) != romUrl:
-            return True
-        if not os.path.exists(self._romNameFile()):
-            return True
-        if Util.readFile(self._romNameFile()) != romName:
+        if Util.readFile(fn) != romName:
             return True
         if not os.path.exists(os.path.join(self.downloadTmpDir, filename)):
+            print("true 5")
             return True
+        print("false")
         return False
-
-    def _romNameFile(self):
-        return os.path.join(self.downloadTmpDir, "ROM_NAME")
-
-    def _romUrlFile(self):
-        return os.path.join(self.downloadTmpDir, "ROM_URL")
 
 
 class MSock:
@@ -261,7 +252,15 @@ class Util:
         if localFile is None:
             Util.cmdExec("/usr/bin/wget", *param, url)
         else:
+            if os.path.exists(localFile):
+                param.insert("-c")
+                print("continue")
             Util.cmdExec("/usr/bin/wget", *param, "-O", localFile, url)
+
+    @staticmethod
+    def wgetContinueDownload(url, localFile):
+        param = Util.wgetCommonDownloadParam().split()
+        Util.cmdExec("/usr/bin/wget", "-c", *param, "-O", localFile, url)
 
     @staticmethod
     def wgetCommonDownloadParam():

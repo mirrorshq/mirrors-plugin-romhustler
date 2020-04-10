@@ -20,7 +20,7 @@ PROGRESS_STAGE_2 = 50
 
 
 def main():
-    sock = MSock.connect()
+    sock = MUtil.connect()
     try:
         selfDir = os.path.dirname(os.path.realpath(__file__))
         classicGameListFile = os.path.join(selfDir, "games_classic.txt")
@@ -43,10 +43,10 @@ def main():
                     except Exception:
                         print(traceback.format_exc())
             i += 1
-            MSock.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
+            MUtil.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
 
         # download popular games
-        if _getInitOrUpdate():
+        if MUtil.getInitOrUpdate():
             gameIdList = _readGameListFromWebSite(mainUrl, dataDir, POPULAR_GAME_PAGE_COUNT,
                                                   _readGameListFile(badGameListFile), isDebug)
             i = 0
@@ -59,25 +59,15 @@ def main():
                         except Exception:
                             print(traceback.format_exc())
                 i += 1
-                MSock.progress_changed(sock, PROGRESS_STAGE_1 + PROGRESS_STAGE_2 * i // len(gameIdList))
+                MUtil.progress_changed(sock, PROGRESS_STAGE_1 + PROGRESS_STAGE_2 * i // len(gameIdList))
 
         # report full progress
-        MSock.progress_changed(sock, 100)
+        MUtil.progress_changed(sock, 100)
     except Exception:
-        MSock.error_occured(sock, sys.exc_info())
+        MUtil.error_occured(sock, sys.exc_info())
         raise
     finally:
         sock.close()
-
-
-def _getInitOrUpdate():
-    if len(sys.argv) == 6:
-        return True
-    elif len(sys.argv) == 7:
-        return False
-    else:
-        print(len(sys.argv))
-        assert False
 
 
 def _readGameListFile(filename):
@@ -190,7 +180,17 @@ class _GameDownloader:
         return False
 
 
-class MSock:
+class MUtil:
+
+    @staticmethod
+    def getInitOrUpdate():
+        # must be called when plugin starts
+        if len(sys.argv) == 6:
+            return True
+        elif len(sys.argv) == 7:
+            return False
+        else:
+            raise Exception("is invalid number %d" % (len(sys.argv)))
 
     @staticmethod
     def connect():

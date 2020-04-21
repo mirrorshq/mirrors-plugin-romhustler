@@ -2,6 +2,7 @@
 # -*- coding: utf-8; tab-width: 4; indent-tabs-mode: t -*-
 
 import os
+import re
 import sys
 import time
 import json
@@ -18,48 +19,69 @@ POPULAR_GAME_PAGE_COUNT = 10
 PROGRESS_STAGE_1 = 50
 PROGRESS_STAGE_2 = 50
 
+HOME_URL = "https://romhustler.org"
+MAIN_URL = "https://romhustler.org/roms"
+ROM_URL_PREFIX = "https://romhustler.org/rom"
+
 
 def main():
+    selfDir = os.path.dirname(os.path.realpath(__file__))
+    classicGameListFile = os.path.join(selfDir, "games_classic.txt")
+    badGameListFile = os.path.join(selfDir, "games_bad.txt")
+
+    p = InfoPrinter()
     sock = MUtil.connect()
     try:
-        selfDir = os.path.dirname(os.path.realpath(__file__))
-        classicGameListFile = os.path.join(selfDir, "games_classic.txt")
-        badGameListFile = os.path.join(selfDir, "games_bad.txt")
-        dataDir = sys.argv[1]
-        logDir = sys.argv[2]
-        isDebug = (sys.argv[3] == "1")
-        mainUrl = "https://romhustler.org/roms"
-        romUrlPrefix = "https://romhustler.org/rom"
+        args = json.loads(sys.argv[1])
+        dataDir = args["data-directory"]
+        bShowUi = ("show-ui" in re.compile(" *\\| *").split(args["debug-flag"]))
+        bFakeDownload = ("fake-download" in re.compile(" *\\| *").split(args["debug-flag"]))
+        isDebug = (args["debug-flag"] != "")                                                        # FIXME
+        blackList = _readGameListFile(badGameListFile)
 
         # download classic games
-        gameIdList = _readGameListFile(classicGameListFile)
-        i = 0
-        for gameId in gameIdList:
-            targetDir = os.path.join(dataDir, gameId)
-            if not os.path.exists(targetDir):
-                with _GameDownloader(isDebug) as obj:
-                    try:
-                        obj.download(dataDir, targetDir, "Classic game", gameId, os.path.join(romUrlPrefix, gameId))
-                    except Exception:
-                        print(traceback.format_exc())
-            i += 1
-            MUtil.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
-
-        # download popular games
-        if MUtil.getInitOrUpdate():
-            gameIdList = _readGameListFromWebSite(mainUrl, dataDir, POPULAR_GAME_PAGE_COUNT,
-                                                  _readGameListFile(badGameListFile), isDebug)
-            i = 0
-            for gameId in gameIdList:
+        p.print("Processing classic games.")
+        p.incIndent()
+        try:
+            gameIdList = Util.randomSorted(_readGameListFile(classicGameListFile))
+            for i in range(0, len(gameIdList)):
+                gameId = gameIdList[i]
                 targetDir = os.path.join(dataDir, gameId)
                 if not os.path.exists(targetDir):
                     with _GameDownloader(isDebug) as obj:
                         try:
-                            obj.download(dataDir, targetDir, "Popular game", gameId, os.path.join(romUrlPrefix, gameId))
+                            obj.download(dataDir, targetDir, "Classic game", gameId, os.path.join(ROM_URL_PREFIX, gameId))
                         except Exception:
                             print(traceback.format_exc())
-                i += 1
+                MUtil.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
+        finally:
+            p.decIndent()
+
+        # download popular games
+        p.print("Processing popular games.")
+        p.incIndent()
+        try:
+            gameIdList = Util.randomSorted(_readPopularGameList())
+            for i in range(0, len(gameIdList)):
+                gameId = gameIdList[i]
+                targetDir = os.path.join(dataDir, gameId)
+                if not os.path.exists(targetDir):
+                    with _GameDownloader(isDebug) as obj:
+                        try:
+                            obj.download(dataDir, targetDir, "Popular game", gameId, os.path.join(ROM_URL_PREFIX, gameId))
+                        except Exception:
+                            print(traceback.format_exc())
                 MUtil.progress_changed(sock, PROGRESS_STAGE_1 + PROGRESS_STAGE_2 * i // len(gameIdList))
+        finally:
+            p.decIndent()
+
+        # download all games
+        p.print("Read random game list.")
+        p.incIndent()
+        try:
+            pass
+        finally:
+            p.decIndent()
 
         # report full progress
         MUtil.progress_changed(sock, 100)
@@ -80,13 +102,25 @@ def _readGameListFile(filename):
     return gameIdList
 
 
-def _readGameListFromWebSite(mainUrl, dataDir, pageCount, blackList, isDebug):
+def _readPopularGameList(blackList, bShowUi):
+    gameIdList = []
+    with SeleniumChrome(bShowUi) as cobj:
+        cobj.getAndWait(HOME_URL)
+        elem = cobj.driver.find_element_by_xpath("/html/body/div[1]/div[2]/div[3]/div[1]/div[2]/div[2]/div/div")
+        for atag in elem.find_elements_by_xpath(".//a"):
+            gameId = "/".join(atag.get_attribute("href").split("/")[-2:])           # "https://romsmania.cc/roms/gameboy-color/pokemon-diamond-226691" -> "gameboy-color/pokemon-diamond-226691"
+            if not _isInBlackList(gameId, blackList):
+                gameIdList.append(gameId)
+    return gameIdList
+
+
+def _readGameListFromWebSite(MAIN_URL, dataDir, pageCount, blackList, isDebug):
     gameIdList = []
     with SeleniumChrome(isDebug) as cobj:
-        cobj.driver.get(mainUrl)                                                        # get first page
+        cobj.driver.get(MAIN_URL)                                                        # get first page
         for i in range(0, pageCount):
             for atag in cobj.driver.find_elements_by_xpath('//div[@class="title"]/a'):
-                gameId = "/".join(atag.get_attribute("href").split("/")[-2:])           # "https://romhustler.org/rom/ps2/god-of-war-usa" -> "ps2/god-of-war-usa"
+                gameId = "/".join(atag.get_attribute("href").split("/")[-2:])
                 gameIdList.append(gameId)
             if i < pageCount - 1:
                 time.sleep(1.0)
@@ -95,6 +129,13 @@ def _readGameListFromWebSite(mainUrl, dataDir, pageCount, blackList, isDebug):
                         atag.click()
                         break
     return gameIdList
+
+
+def _isInBlackList(gameId, blackList):
+    for bgId in blackList:
+        if fnmatch.fnmatch(gameId, bgId):
+            return True
+    return False
 
 
 class _GameDownloader:
@@ -288,6 +329,25 @@ class Util:
         if ret.returncode != 0:
             ret.check_returncode()
         return ret.stdout.rstrip()
+
+
+class InfoPrinter:
+
+    def __init__(self):
+        self.indent = 0
+
+    def incIndent(self):
+        self.indent = self.indent + 1
+
+    def decIndent(self):
+        assert self.indent > 0
+        self.indent = self.indent - 1
+
+    def print(self, s):
+        line = ""
+        line += "\t" * self.indent
+        line += s
+        print(line)
 
 
 class SeleniumChrome:

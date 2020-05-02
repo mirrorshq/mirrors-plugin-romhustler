@@ -16,12 +16,15 @@ import selenium.webdriver
 
 POPULAR_GAME_PAGE_COUNT = 10
 
-PROGRESS_STAGE_1 = 50
-PROGRESS_STAGE_2 = 50
-
 HOME_URL = "https://romhustler.org"
 MAIN_URL = "https://romhustler.org/roms"
 ROM_URL_PREFIX = "https://romhustler.org/rom"
+
+POPULAR_GAME_FILE = "POPULAR_GAMES"
+BAD_GAME_FAILE = "UNAVAILABLE_GAMES"
+
+PROGRESS_STAGE_1 = 50
+PROGRESS_STAGE_2 = 50
 
 
 def main():
@@ -37,13 +40,13 @@ def main():
         bShowUi = ("show-ui" in re.compile(" *\\| *").split(args["debug-flag"]))
         bFakeDownload = ("fake-download" in re.compile(" *\\| *").split(args["debug-flag"]))
         isDebug = (args["debug-flag"] != "")                                                        # FIXME
-        blackList = _readGameListFile(badGameListFile)
+        blackList = Util.readGameListFile(badGameListFile)
 
         # download classic games
         p.print("Processing classic games.")
         p.incIndent()
         try:
-            gameIdList = Util.randomSorted(_readGameListFile(classicGameListFile))
+            gameIdList = Util.randomSorted(Util.readGameListFile(classicGameListFile))
             for i in range(0, len(gameIdList)):
                 gameId = gameIdList[i]
                 targetDir = os.path.join(dataDir, gameId)
@@ -90,16 +93,6 @@ def main():
         raise
     finally:
         sock.close()
-
-
-def _readGameListFile(filename):
-    gameIdList = []
-    with open(filename) as f:
-        for line in f.read().split("\n"):
-            line = line.strip()
-            if line != "" and not line.startswith("#"):
-                gameIdList.append(line)
-    return gameIdList
 
 
 def _readPopularGameList(blackList, bShowUi):
@@ -247,6 +240,7 @@ class MUtil:
                 "progress": progress,
             },
         }).encode("utf-8"))
+        sock.send(b'\n')
 
     @staticmethod
     def error_occured(sock, exc_info):
@@ -256,9 +250,59 @@ class MUtil:
                 "exc_info": "abc",
             },
         }).encode("utf-8"))
+        sock.send(b'\n')
 
 
 class Util:
+
+    @staticmethod
+    def readGameListFile(filename):
+        gameIdList = []
+        with open(filename, "r") as f:
+            for line in f.read().split("\n"):
+                try:
+                    line = line[0:line.index("#")]
+                except ValueError:
+                    pass
+                line = line.strip()
+                if line != "":
+                    gameIdList.append(line)
+        return gameIdList
+
+    @staticmethod
+    def writeGameListFile(filename, gameIdList):
+        if len(gameIdList) == 0:
+            return
+
+        gameIdSet = set()
+        if os.path.exists(filename):
+            gameIdSet = set(Util.readGameListFile(filename))
+
+        gameIdSet |= set(gameIdList)
+
+        with open(filename, "w") as f:
+            for gameId in sorted(list(gameIdSet)):
+                f.write(gameId)
+                f.write("\n")
+
+    @staticmethod
+    def touchFile(filename):
+        assert not os.path.exists(filename)
+        f = open(filename, 'w')
+        f.close()
+
+    @staticmethod
+    def forceDelete(filename):
+        if os.path.islink(filename):
+            os.remove(filename)
+        elif os.path.isfile(filename):
+            os.remove(filename)
+        elif os.path.isdir(filename):
+            shutil.rmtree(filename)
+
+    @staticmethod
+    def randomSorted(tlist):
+        return sorted(tlist, key=lambda x: random.random())
 
     @staticmethod
     def readFile(filename):
@@ -350,113 +394,7 @@ class InfoPrinter:
         print(line)
 
 
-class SeleniumChrome:
-
-    def __init__(self, showUi, downloadDir=None):
-        self.downloadDir = os.getcwd() if downloadDir is None else downloadDir
-
-        options = selenium.webdriver.chrome.options.Options()
-        if not showUi:
-            options.add_argument('--headless')
-        options.add_argument('--no-sandbox')                    # FIXME
-        options.add_experimental_option("prefs", {
-            "download.default_directory": self.downloadDir,
-            "download.prompt_for_download": False,
-            "download.directory_upgrade": True,
-            "safebrowsing.enabled": False,
-            "safebrowsing.disable_download_protection": True,
-        })
-        self.driver = selenium.webdriver.Chrome(options=options)
-
-        self._enableDownloadInHeadlessChrome()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, type, value, traceback):
-        self.driver.quit()
-        self.driver = None
-
-    def scrollToPageEnd(self):
-        self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
-
-    def gotoDownloadManagerAndGetDownloadInfo(self):
-        # return (url, filename)
-
-        # goto download manager page
-        self.driver.get("chrome://downloads/")
-        while self.driver.execute_script("return %s" % (self._downloadManagerSelector())) is None:
-            time.sleep(1)
-        while self.driver.execute_script("return %s" % (self._downloadFileSelector())) is None:
-            time.sleep(1)
-
-        # get information
-        url = self.driver.execute_script("return %s.shadowRoot.querySelector('div#content  #file-link').href" % (self._downloadFileSelector()))
-        filename = self.driver.execute_script("return %s.shadowRoot.querySelector('div#content  #file-link').text" % (self._downloadFileSelector()))
-
-        # cancel download
-        self.driver.execute_script("%s.shadowRoot.querySelector('cr-button[focus-type=\"cancel\"]').click()" % (self._downloadFileSelector()))
-
-        return (url, filename)
-
-    def _enableDownloadInHeadlessChrome(self):
-        """
-        there is currently a "feature" in chrome where
-        headless does not allow file download: https://bugs.chromium.org/p/chromium/issues/detail?id=696481
-        This method is a hacky work-around until the official chromedriver support for this.
-        Requires chrome version 62.0.3196.0 or above.
-        """
-
-        # add missing support for chrome "send_command"  to selenium webdriver
-        self.driver.command_executor._commands["send_command"] = ("POST", '/session/$sessionId/chromium/send_command')
-
-        params = {'cmd': 'Page.setDownloadBehavior', 'params': {'behavior': 'allow', 'downloadPath': self.downloadDir}}
-        self.driver.execute("send_command", params)
-
-    def _downloadManagerSelector(self):
-        return "document.querySelector('downloads-manager')"
-
-    def _downloadFileSelector(self):
-        return "%s.shadowRoot.querySelector('#downloadsList downloads-item')" % (self._downloadManagerSelector())
-
-
 ###############################################################################
 
 if __name__ == "__main__":
     main()
-
-
-# def gotoDownloadManagerAndWaitDownloadStart(self):
-#     self.driver.get("chrome://downloads/")
-#     while self.driver.execute_script("return %s" % (self._downloadManagerSelector())) is None:
-#         time.sleep(1)
-#     while self.driver.execute_script("return %s" % (self._downloadFileSelector())) is None:
-#         print("None")
-#         time.sleep(1)
-#     self.downloadUrl = self.driver.execute_script("return %s.shadowRoot.querySelector('div#content  #file-link').href" % (self._downloadFileSelector()))
-#     self.downloadFilePath = os.path.join(self.downloadDir, self.driver.execute_script("return %s.shadowRoot.querySelector('div#content  #file-link').text" % (self._downloadFileSelector())))
-
-# def isInDownloadManager(self):
-#     return self.driver.current_url == "chrome://downloads/"
-
-# def getDownloadUrl(self):
-#     return self.downloadUrl
-
-# def getDownloadFilePath(self):
-#     return self.downloadFilePath
-
-# def getDownloadProgress(self):
-#     try:
-#         return self.driver.execute_script("return %s.shadowRoot.querySelector('#progress').value" % (self._downloadFileSelector()))
-#     except selenium.common.exceptions.WebDriverException:
-#         # it's weird that chrome auto close after download complete
-#         # so this exception "selenium.common.exceptions.WebDriverException: Message: chrome not reachable" means progress 100
-#         return 100
-
-# def cancelDownload(self):
-#     assert self.isInDownloadManager()
-#     self.driver.execute_script("%s.shadowRoot.querySelector('cr-button[focus-type=\"cancel\"]').click()" % (self._downloadFileSelector()))
-
-# def removeDownload(self):
-#     self.driver.execute_script("%s.shadowRoot.querySelector('cr-icon-button').click()" % (self._downloadFileSelector()))
-

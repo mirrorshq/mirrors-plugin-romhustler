@@ -42,7 +42,7 @@ class Main:
         self.logDir = args["log-directory"]
         self.isDebug = (args["debug-flag"] != "")
         self.blackList = Util.readGameListFile(self.badGameListFile)
-        self.mpObj = manpa.Manpa(isDebug=self.isDebug)
+        self.mp = manpa.Manpa(isDebug=self.isDebug)
         self.p = InfoPrinter()
 
     def run(self):
@@ -61,7 +61,7 @@ class Main:
                     failList.append(gameIdList[i])
             Util.writeGameListFile(os.path.join(self.dataDir, self.popularGameFile), downloadedList)
             Util.writeGameListFile(os.path.join(self.dataDir, self.badGameFile), failList)
-            MUtil.progress_changed(sock, PROGRESS_STAGE_CLASSIC)
+            MUtil.progress_changed(self.sock, PROGRESS_STAGE_CLASSIC)
         finally:
             self.p.decIndent()
 
@@ -80,7 +80,7 @@ class Main:
                     failList.append(gameIdList[i])
             Util.writeGameListFile(os.path.join(self.dataDir, self.popularGameFile), downloadedList)
             Util.writeGameListFile(os.path.join(self.dataDir, self.badGameFile), failList)
-            MUtil.progress_changed(sock, PROGRESS_STAGE_CLASSIC + PROGRESS_STAGE_POPULAR)
+            MUtil.progress_changed(self.sock, PROGRESS_STAGE_CLASSIC + PROGRESS_STAGE_POPULAR)
         finally:
             self.p.decIndent()
 
@@ -88,21 +88,21 @@ class Main:
         self.p.print("Processing all games.")
         self.p.incIndent()
         try:
-            for gameConsole in self.readGameListFromWebSite():
-                failList = []
-                for i in range(0, len(gameIdList)):
-                    try:
-                        self.downloadGame("Game", gameIdList[i])
-                    except Exception:
-                        failList.append(gameIdList[i])
-                Util.writeGameListFile(os.path.join(self.dataDir, self.badGameFile), failList)
-            MUtil.progress_changed(sock, PROGRESS_STAGE_CLASSIC + PROGRESS_STAGE_POPULAR + PROGRESS_STAGE_OTHER)
+            gameIdList = self.readGameListFromWebSite()
+            failList = []
+            for i in range(0, len(gameIdList)):
+                try:
+                    self.downloadGame("Game", gameIdList[i])
+                except Exception:
+                    failList.append(gameIdList[i])
+            Util.writeGameListFile(os.path.join(self.dataDir, self.badGameFile), failList)
+            MUtil.progress_changed(self.sock, PROGRESS_STAGE_CLASSIC + PROGRESS_STAGE_POPULAR + PROGRESS_STAGE_OTHER)
         finally:
             self.p.decIndent()
 
     def readPopularGameList(self):
         gameIdList = []
-        with self.mpObj.open_selenium_client() as driver:
+        with self.mp.open_selenium_client() as driver:
             driver.get_and_wait(HOME_URL)
             elem = driver.find_element_by_xpath("/html/body/div[1]/div[2]/div[3]/div[1]/div[2]/div[2]/div/div")
             for atag in elem.find_elements_by_xpath(".//a"):
@@ -112,7 +112,7 @@ class Main:
 
     def readGameListFromWebSite(self, pageCount=9999):
         gameIdList = []
-        with self.mpObj.open_selenium_client() as driver:
+        with self.mp.open_selenium_client() as driver:
             driver.get_and_wait(MAIN_URL)
             for i in range(0, pageCount):
                 for atag in driver.find_elements_by_xpath('//div[@class="title"]/a'):
@@ -154,7 +154,7 @@ class Main:
             romName = None
             url = None
             filename = None
-            with self.mpObj.open_selenium_client() as driver:
+            with self.mp.open_selenium_client() as driver:
                 # load game page
                 driver.get_and_wait(gameUrl)
                 if driver.current_url != gameUrl:
@@ -281,6 +281,7 @@ class Util:
                 f.write(gameId)
                 f.write("\n")
 
+    @staticmethod
     def isInBlackList(gameId, blackList):
         for bgId in blackList:
             if fnmatch.fnmatch(gameId, bgId):

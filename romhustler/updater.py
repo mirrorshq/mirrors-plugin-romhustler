@@ -2,229 +2,225 @@
 # -*- coding: utf-8; tab-width: 4; indent-tabs-mode: t -*-
 
 import os
-import re
 import sys
 import time
 import json
+import manpa
 import shutil
 import random
 import socket
+import fnmatch
 import traceback
 import subprocess
 import selenium.common
 import selenium.webdriver
 
-POPULAR_GAME_PAGE_COUNT = 10
 
 HOME_URL = "https://romhustler.org"
 MAIN_URL = "https://romhustler.org/roms"
 ROM_URL_PREFIX = "https://romhustler.org/rom"
 
-POPULAR_GAME_FILE = "POPULAR_GAMES"
-BAD_GAME_FAILE = "UNAVAILABLE_GAMES"
-
-PROGRESS_STAGE_1 = 50
-PROGRESS_STAGE_2 = 50
+PROGRESS_STAGE_CLASSIC = 20
+PROGRESS_STAGE_POPULAR = 30
+PROGRESS_STAGE_OTHER = 50
 
 
-def main():
-    selfDir = os.path.dirname(os.path.realpath(__file__))
-    classicGameListFile = os.path.join(selfDir, "games_classic.txt")
-    badGameListFile = os.path.join(selfDir, "games_bad.txt")
+class Main:
 
-    p = InfoPrinter()
-    sock = MUtil.connect()
-    try:
+    def __init__(self, sock):
+        selfDir = os.path.dirname(os.path.realpath(__file__))
         args = json.loads(sys.argv[1])
-        dataDir = args["data-directory"]
-        bShowUi = ("show-ui" in re.compile(" *\\| *").split(args["debug-flag"]))
-        bFakeDownload = ("fake-download" in re.compile(" *\\| *").split(args["debug-flag"]))
-        isDebug = (args["debug-flag"] != "")                                                        # FIXME
-        blackList = Util.readGameListFile(badGameListFile)
 
+        self.classicGameListFile = os.path.join(selfDir, "games_classic.txt")
+        self.badGameListFile = os.path.join(selfDir, "games_bad.txt")
+
+        self.popularGameFile = "POPULAR_GAMES"
+        self.badGameFile = "UNAVAILABLE_GAMES"
+
+        self.sock = sock
+        self.dataDir = args["data-directory"]
+        self.logDir = args["log-directory"]
+        self.isDebug = (args["debug-flag"] != "")
+        self.blackList = Util.readGameListFile(self.badGameListFile)
+        self.mpObj = manpa.Manpa(isDebug=self.isDebug)
+        self.p = InfoPrinter()
+
+    def run(self):
         # download classic games
-        p.print("Processing classic games.")
-        p.incIndent()
+        self.p.print("Processing classic games.")
+        self.p.incIndent()
         try:
-            gameIdList = Util.randomSorted(Util.readGameListFile(classicGameListFile))
+            gameIdList = Util.randomSorted(Util.readGameListFile(self.classicGameListFile))
+            downloadedList = []
+            failList = []
             for i in range(0, len(gameIdList)):
-                gameId = gameIdList[i]
-                targetDir = os.path.join(dataDir, gameId)
-                if not os.path.exists(targetDir):
-                    with _GameDownloader(isDebug) as obj:
-                        try:
-                            obj.download(dataDir, targetDir, "Classic game", gameId, os.path.join(ROM_URL_PREFIX, gameId))
-                        except Exception:
-                            print(traceback.format_exc())
-                MUtil.progress_changed(sock, PROGRESS_STAGE_1 * i // len(gameIdList))
+                try:
+                    self.downloadGame("Classic game", gameIdList[i])
+                    downloadedList.append(gameIdList[i])
+                except Exception:
+                    failList.append(gameIdList[i])
+            Util.writeGameListFile(os.path.join(self.dataDir, self.popularGameFile), downloadedList)
+            Util.writeGameListFile(os.path.join(self.dataDir, self.badGameFile), failList)
+            MUtil.progress_changed(sock, PROGRESS_STAGE_CLASSIC)
         finally:
-            p.decIndent()
+            self.p.decIndent()
 
         # download popular games
-        p.print("Processing popular games.")
-        p.incIndent()
+        self.p.print("Processing popular games.")
+        self.p.incIndent()
         try:
-            gameIdList = Util.randomSorted(_readPopularGameList())
+            gameIdList = self.readPopularGameList()
+            downloadedList = []
+            failList = []
             for i in range(0, len(gameIdList)):
-                gameId = gameIdList[i]
-                targetDir = os.path.join(dataDir, gameId)
-                if not os.path.exists(targetDir):
-                    with _GameDownloader(isDebug) as obj:
-                        try:
-                            obj.download(dataDir, targetDir, "Popular game", gameId, os.path.join(ROM_URL_PREFIX, gameId))
-                        except Exception:
-                            print(traceback.format_exc())
-                MUtil.progress_changed(sock, PROGRESS_STAGE_1 + PROGRESS_STAGE_2 * i // len(gameIdList))
+                try:
+                    self.downloadGame("Popular game", gameIdList[i])
+                    downloadedList.append(gameIdList[i])
+                except Exception:
+                    failList.append(gameIdList[i])
+            Util.writeGameListFile(os.path.join(self.dataDir, self.popularGameFile), downloadedList)
+            Util.writeGameListFile(os.path.join(self.dataDir, self.badGameFile), failList)
+            MUtil.progress_changed(sock, PROGRESS_STAGE_CLASSIC + PROGRESS_STAGE_POPULAR)
         finally:
-            p.decIndent()
+            self.p.decIndent()
 
         # download all games
-        p.print("Read random game list.")
-        p.incIndent()
+        self.p.print("Processing all games.")
+        self.p.incIndent()
         try:
-            pass
+            for gameConsole in self.readGameListFromWebSite():
+                failList = []
+                for i in range(0, len(gameIdList)):
+                    try:
+                        self.downloadGame("Game", gameIdList[i])
+                    except Exception:
+                        failList.append(gameIdList[i])
+                Util.writeGameListFile(os.path.join(self.dataDir, self.badGameFile), failList)
+            MUtil.progress_changed(sock, PROGRESS_STAGE_CLASSIC + PROGRESS_STAGE_POPULAR + PROGRESS_STAGE_OTHER)
         finally:
-            p.decIndent()
+            self.p.decIndent()
 
-        # report full progress
-        MUtil.progress_changed(sock, 100)
-    except Exception:
-        MUtil.error_occured(sock, sys.exc_info())
-        raise
-    finally:
-        sock.close()
-
-
-def _readPopularGameList(blackList, bShowUi):
-    gameIdList = []
-    with SeleniumChrome(bShowUi) as cobj:
-        cobj.getAndWait(HOME_URL)
-        elem = cobj.driver.find_element_by_xpath("/html/body/div[1]/div[2]/div[3]/div[1]/div[2]/div[2]/div/div")
-        for atag in elem.find_elements_by_xpath(".//a"):
-            gameId = "/".join(atag.get_attribute("href").split("/")[-2:])           # "https://romsmania.cc/roms/gameboy-color/pokemon-diamond-226691" -> "gameboy-color/pokemon-diamond-226691"
-            if not _isInBlackList(gameId, blackList):
+    def readPopularGameList(self):
+        gameIdList = []
+        with self.mpObj.open_selenium_client() as driver:
+            driver.get_and_wait(HOME_URL)
+            elem = driver.find_element_by_xpath("/html/body/div[1]/div[2]/div[3]/div[1]/div[2]/div[2]/div/div")
+            for atag in elem.find_elements_by_xpath(".//a"):
+                gameId = "/".join(atag.get_attribute("href").split("/")[-2:])           # "https://romsmania.cc/roms/gameboy-color/pokemon-diamond-226691" -> "gameboy-color/pokemon-diamond-226691"
                 gameIdList.append(gameId)
-    return gameIdList
+        return gameIdList
 
+    def readGameListFromWebSite(self, pageCount=9999):
+        gameIdList = []
+        with self.mpObj.open_selenium_client() as driver:
+            driver.get_and_wait(MAIN_URL)
+            for i in range(0, pageCount):
+                for atag in driver.find_elements_by_xpath('//div[@class="title"]/a'):
+                    gameId = "/".join(atag.get_attribute("href").split("/")[-2:])
+                    gameIdList.append(gameId)
+                if i < pageCount - 1:
+                    time.sleep(1.0)
+                    for atag in driver.find_elements_by_xpath("//a"):
+                        if atag.text == "next>":                                        # get next page, find_element_by_xpath('//a[text()="next>"]') has no effect, don't know why
+                            atag.click_and_wait()
+                            break
+        return gameIdList
 
-def _readGameListFromWebSite(MAIN_URL, dataDir, pageCount, blackList, isDebug):
-    gameIdList = []
-    with SeleniumChrome(isDebug) as cobj:
-        cobj.driver.get(MAIN_URL)                                                        # get first page
-        for i in range(0, pageCount):
-            for atag in cobj.driver.find_elements_by_xpath('//div[@class="title"]/a'):
-                gameId = "/".join(atag.get_attribute("href").split("/")[-2:])
-                gameIdList.append(gameId)
-            if i < pageCount - 1:
-                time.sleep(1.0)
-                for atag in cobj.driver.find_elements_by_xpath("//a"):
-                    if atag.text == "next>":                                            # get next page, find_element_by_xpath('//a[text()="next>"]') has no effect, don't know why
-                        atag.click()
-                        break
-    return gameIdList
+    def downloadGame(self, gameTypename, gameId):
+        gameUrl = os.path.join(ROM_URL_PREFIX, gameId)
 
+        # prepare temporary directory
+        downloadTmpDir = self._getDownloadTmpDir(gameId)
+        Util.ensureDir(downloadTmpDir)
 
-def _isInBlackList(gameId, blackList):
-    for bgId in blackList:
-        if fnmatch.fnmatch(gameId, bgId):
-            return True
-    return False
+        # do work
+        targetDir = os.path.join(self.dataDir, gameId)
+        if os.path.exists(targetDir):
+            self._checkGame(gameTypename, gameId, gameUrl, targetDir, downloadTmpDir)
+        else:
+            self._downloadGame(gameTypename, gameId, gameUrl, targetDir, downloadTmpDir)
 
+        # remove download temp files only if everything is OK
+        Util.forceDelete(downloadTmpDir)
 
-class _GameDownloader:
+    def removeDownloadTmpDir(self, gameId):
+        downloadTmpDir = self._getDownloadTmpDir(gameId)
+        assert os.path.realpath(downloadTmpDir).startswith(self.dataDir)
+        Util.shellCall("/bin/rm -rf %s" % (downloadTmpDir))
 
-    def __init__(self, isDebug):
-        self.isDebug = isDebug
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, type, value, traceback):
-        pass
-
-    def download(self, dataDir, targetDir, gameTypename, gameId, gameUrl):
-        self.downloadTmpDir = os.path.join(dataDir, "_tmp_" + gameId.replace("/", "_"))
-        Util.ensureDir(self.downloadTmpDir)
+    def _downloadGame(self, gameTypename, gameId, gameUrl, targetDir, downloadTmpDir):
         try:
+            # find game url
             romName = None
             url = None
             filename = None
-            with SeleniumChrome(self.isDebug, self.downloadTmpDir) as cobj:
+            with self.mpObj.open_selenium_client() as driver:
                 # load game page
-                cobj.driver.get(gameUrl)
-                if cobj.driver.current_url != gameUrl:
+                driver.get_and_wait(gameUrl)
+                if driver.current_url != gameUrl:
                     print("%s %s does not exists." % (gameTypename, gameId))
                     return
 
                 # check if we can download this rom
                 try:
-                    atag = cobj.driver.find_element_by_xpath("//div[contains(text(), \"download is disabled\")]")
+                    atag = driver.find_element_by_xpath("//div[contains(text(), \"download is disabled\")]")
                     print("%s %s is not available for download." % (gameTypename, gameId))
                     return
                 except selenium.common.exceptions.NoSuchElementException:
                     pass
 
                 # get game name
-                romName = cobj.driver.find_element_by_xpath("//h1[@itemprop=\"name\"]").text
+                romName = driver.find_element_by_xpath("//h1[@itemprop=\"name\"]").text
 
                 # load download page, click to download
-                cobj.driver.find_element_by_link_text("Click here to download this rom").click()
+                driver.find_element_by_link_text("Click here to download this rom").click()
                 while True:
                     time.sleep(1)
                     try:
-                        cobj.driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
-                        atag = cobj.driver.find_element_by_link_text("here")
+                        driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+                        atag = driver.find_element_by_link_text("here")
                         atag.click()
+                        url, filename = driver.retrieve_download_information()
                         break
                     except selenium.common.exceptions.NoSuchElementException:
                         pass
 
-                # get download information
-                url, filename = cobj.gotoDownloadManagerAndGetDownloadInfo()
-
-            # do download
-            if self._freshDownloadNeeded(url, romName, filename):
-                Util.shellCall("/bin/rm -rf %s/*" % (self.downloadTmpDir))
-                with open(os.path.join(self.downloadTmpDir, "ROM_NAME"), "w") as f:
+            # download game
+            if self._freshDownloadNeeded(url, romName, filename, downloadTmpDir):
+                Util.shellCall("/bin/rm -rf %s/*" % (downloadTmpDir))
+                with open(os.path.join(downloadTmpDir, "ROM_NAME"), "w") as f:
                     f.write(romName)
-                Util.wgetDownload(url, os.path.join(self.downloadTmpDir, filename))
+                Util.wgetDownload(url, os.path.join(downloadTmpDir, filename))
             else:
-                Util.wgetContinueDownload(url, os.path.join(self.downloadTmpDir, filename))
+                Util.wgetContinueDownload(url, os.path.join(downloadTmpDir, filename))
+        except Exception:
+            traceback.print_exc()
+            return
 
-            # save to target directory
-            Util.ensureDir(targetDir)
-            Util.shellCall("/bin/mv %s/* %s" % (self.downloadTmpDir, targetDir))
-            print("%s %s downloaded." % (gameTypename, gameId))
+        # save to target directory
+        Util.forceDelete(targetDir)
+        Util.ensureDir(os.path.dirname(targetDir))
+        Util.shellCall("/bin/mv %s %s" % (downloadTmpDir, targetDir))
+        self.p.print("%s %s downloaded." % (gameTypename, gameId))
 
-            # remove download temp files only if everything is OK
-            shutil.rmtree(self.downloadTmpDir)
-        finally:
-            del self.downloadTmpDir
+    def _checkGame(self, gameTypename, gameId, gameUrl, targetDir, downloadTmpDir):
+        self.p.print("%s %s checked." % (gameTypename, gameId))
 
-    def _freshDownloadNeeded(self, romUrl, romName, filename):
-        fn = os.path.join(self.downloadTmpDir, "ROM_NAME")
+    def _freshDownloadNeeded(self, romUrl, romName, filename, downloadTmpDir):
+        fn = os.path.join(downloadTmpDir, "ROM_NAME")
         if not os.path.exists(fn):
             return True
         if Util.readFile(fn) != romName:
             return True
-        if not os.path.exists(os.path.join(self.downloadTmpDir, filename)):
-            print("true 5")
+        if not os.path.exists(os.path.join(downloadTmpDir, filename)):
             return True
-        print("false")
         return False
+
+    def _getDownloadTmpDir(self, gameId):
+        return os.path.join(self.dataDir, "_tmp_" + gameId.replace("/", "_"))
 
 
 class MUtil:
-
-    @staticmethod
-    def getInitOrUpdate():
-        # must be called when plugin starts
-        if len(sys.argv) == 6:
-            return True
-        elif len(sys.argv) == 7:
-            return False
-        else:
-            raise Exception("is invalid number %d" % (len(sys.argv)))
 
     @staticmethod
     def connect():
@@ -284,6 +280,12 @@ class Util:
             for gameId in sorted(list(gameIdSet)):
                 f.write(gameId)
                 f.write("\n")
+
+    def isInBlackList(gameId, blackList):
+        for bgId in blackList:
+            if fnmatch.fnmatch(gameId, bgId):
+                return True
+        return False
 
     @staticmethod
     def touchFile(filename):
@@ -352,10 +354,6 @@ class Util:
         return "-t 0 -w 60 --random-wait -T 60 --passive-ftp"
 
     @staticmethod
-    def randomSorted(tlist):
-        return sorted(tlist, key=lambda x: random.random())
-
-    @staticmethod
     def ensureDir(dirname):
         if not os.path.exists(dirname):
             os.makedirs(dirname)
@@ -397,4 +395,12 @@ class InfoPrinter:
 ###############################################################################
 
 if __name__ == "__main__":
-    main()
+    sock = MUtil.connect()
+    try:
+        Main().run(sock)
+        MUtil.progress_changed(sock, 100)
+    except Exception:
+        MUtil.error_occured(sock, sys.exc_info())
+        raise
+    finally:
+        sock.close()

@@ -172,18 +172,29 @@ class Main:
                 # get game name
                 romName = driver.find_element_by_xpath("//h1[@itemprop=\"name\"]").text
 
-                # load download page, click to download
+                # load layer1 download page, click to load layer2 download page and wait for the target hyperlink
                 driver.find_element_by_link_text("Click here to download this rom").click()
+                atag = None
                 while True:
                     time.sleep(1)
+                    driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+                    atag = None
                     try:
-                        driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
                         atag = driver.find_element_by_link_text("here")
-                        atag.click()
-                        url, filename = driver.retrieve_download_information()
                         break
                     except selenium.common.exceptions.NoSuchElementException:
-                        pass
+                        continue
+
+                # click and wait for download to start (the website opens a new tab to start download)
+                atag.click()
+                time.sleep(1)
+                while len(driver.window_handles) > 1:
+                    time.sleep(1)
+
+                # get download information
+                url, filename = driver.retrieve_download_information_and_remove_download()
+                print("debug: " + url)
+                print("debug: " + filename)
 
             # download game
             if self._freshDownloadNeeded(url, romName, filename, downloadTmpDir):
@@ -398,7 +409,7 @@ class InfoPrinter:
 if __name__ == "__main__":
     sock = MUtil.connect()
     try:
-        Main().run(sock)
+        Main(sock).run()
         MUtil.progress_changed(sock, 100)
     except Exception:
         MUtil.error_occured(sock, sys.exc_info())
